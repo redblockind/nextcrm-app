@@ -3,7 +3,11 @@ import { prismadb } from "@/lib/prisma";
 import { Resend } from "resend";
 import { resolveMergeTags } from "@/lib/campaigns/merge-tags";
 
-const resend = new Resend(process.env.RESEND_API_KEY);
+let _resend: Resend | null = null;
+function getResend(): Resend {
+  if (!_resend) _resend = new Resend(process.env.RESEND_API_KEY);
+  return _resend;
+}
 
 export const campaignSendStep = inngest.createFunction(
   {
@@ -38,7 +42,7 @@ export const campaignSendStep = inngest.createFunction(
       : process.env.RESEND_FROM_EMAIL!;
 
     const result = await step.run("send-email", async () => {
-      return resend.emails.send({
+      return getResend().emails.send({
         from: fromAddress,
         to: sendRecord.email,
         subject: resolveMergeTags(sendRecord.step.subject, sendRecord.target),

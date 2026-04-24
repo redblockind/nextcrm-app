@@ -10,7 +10,11 @@ import * as activityActions from "@/actions/reports/activity";
 import * as campaignsActions from "@/actions/reports/campaigns";
 import * as usersActions from "@/actions/reports/users";
 
-const resend = new Resend(process.env.RESEND_API_KEY);
+let _resend: Resend | null = null;
+function getResend(): Resend {
+  if (!_resend) _resend = new Resend(process.env.RESEND_API_KEY);
+  return _resend;
+}
 
 async function getReportData(category: string, filters: any) {
   switch (category) {
@@ -74,7 +78,7 @@ export const reportSendScheduled = inngest.createFunction(
           attachments.push({ filename: `${schedule.reportConfig.category}-report.pdf`, content: pdfBuffer });
         }
 
-        await resend.emails.send({
+        await getResend().emails.send({
           from: process.env.RESEND_FROM_EMAIL!,
           to: schedule.recipients as string[],
           subject: `Report: ${schedule.reportConfig.name}`,
