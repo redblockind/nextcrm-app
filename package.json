@@ -3,12 +3,12 @@
   "version": "0.11.1",
   "private": true,
   "engines": {
-    "node": ">=22.12.0",
+    "node": ">=20.0.0",
     "pnpm": ">=9.0.0"
   },
   "scripts": {
     "dev": "next dev",
-    "build": "prisma generate && prisma migrate deploy && next build",
+    "build": "prisma generate && (if [ -n \"$DATABASE_URL\" ]; then prisma migrate deploy; else echo 'Skipping prisma migrate deploy: DATABASE_URL not set'; fi) && next build",
     "start": "next start",
     "lint": "eslint . --max-warnings=0",
     "migrate:mongo-to-postgres": "pnpm exec tsx scripts/migrate-mongo-to-postgres.ts",
