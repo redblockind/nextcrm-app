@@ -1,11 +1,34 @@
--- CreateEnum
-CREATE TYPE "Invoice_Status" AS ENUM ('DRAFT', 'ISSUED', 'SENT', 'PARTIALLY_PAID', 'PAID', 'OVERDUE', 'CANCELLED', 'DISPUTED', 'REFUNDED', 'WRITTEN_OFF');
+-- Drop any partially-created invoice objects from prior failed runs so the
+-- migration can apply cleanly. Safe because this migration has never been
+-- recorded as applied; CASCADE removes dependent indexes/constraints.
+DROP TABLE IF EXISTS "Invoice_Activity" CASCADE;
+DROP TABLE IF EXISTS "Invoice_Attachments" CASCADE;
+DROP TABLE IF EXISTS "Invoice_Payments" CASCADE;
+DROP TABLE IF EXISTS "Invoice_LineItems" CASCADE;
+DROP TABLE IF EXISTS "Invoice_Settings" CASCADE;
+DROP TABLE IF EXISTS "Invoice_Currencies" CASCADE;
+DROP TABLE IF EXISTS "Invoice_Series" CASCADE;
+DROP TABLE IF EXISTS "Invoice_TaxRates" CASCADE;
+DROP TABLE IF EXISTS "Invoices" CASCADE;
+DROP TYPE IF EXISTS "Invoice_Status";
+DROP TYPE IF EXISTS "Invoice_Type";
 
 -- CreateEnum
-CREATE TYPE "Invoice_Type" AS ENUM ('INVOICE', 'CREDIT_NOTE', 'PROFORMA');
+DO $$ BEGIN
+    CREATE TYPE "Invoice_Status" AS ENUM ('DRAFT', 'ISSUED', 'SENT', 'PARTIALLY_PAID', 'PAID', 'OVERDUE', 'CANCELLED', 'DISPUTED', 'REFUNDED', 'WRITTEN_OFF');
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
+
+-- CreateEnum
+DO $$ BEGIN
+    CREATE TYPE "Invoice_Type" AS ENUM ('INVOICE', 'CREDIT_NOTE', 'PROFORMA');
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
 
 -- CreateTable
-CREATE TABLE "Invoices" (
+CREATE TABLE IF NOT EXISTS "Invoices" (
     "id" UUID NOT NULL,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
@@ -45,7 +68,7 @@ CREATE TABLE "Invoices" (
 );
 
 -- CreateTable
-CREATE TABLE "Invoice_LineItems" (
+CREATE TABLE IF NOT EXISTS "Invoice_LineItems" (
     "id" UUID NOT NULL,
     "invoiceId" UUID NOT NULL,
     "position" INTEGER NOT NULL,
@@ -64,7 +87,7 @@ CREATE TABLE "Invoice_LineItems" (
 );
 
 -- CreateTable
-CREATE TABLE "Invoice_Payments" (
+CREATE TABLE IF NOT EXISTS "Invoice_Payments" (
     "id" UUID NOT NULL,
     "invoiceId" UUID NOT NULL,
     "paidAt" TIMESTAMP(3) NOT NULL,
@@ -79,7 +102,7 @@ CREATE TABLE "Invoice_Payments" (
 );
 
 -- CreateTable
-CREATE TABLE "Invoice_Attachments" (
+CREATE TABLE IF NOT EXISTS "Invoice_Attachments" (
     "id" UUID NOT NULL,
     "invoiceId" UUID NOT NULL,
     "storageKey" TEXT NOT NULL,
@@ -94,7 +117,7 @@ CREATE TABLE "Invoice_Attachments" (
 );
 
 -- CreateTable
-CREATE TABLE "Invoice_Activity" (
+CREATE TABLE IF NOT EXISTS "Invoice_Activity" (
     "id" UUID NOT NULL,
     "invoiceId" UUID NOT NULL,
     "actorId" UUID NOT NULL,
@@ -106,7 +129,7 @@ CREATE TABLE "Invoice_Activity" (
 );
 
 -- CreateTable
-CREATE TABLE "Invoice_TaxRates" (
+CREATE TABLE IF NOT EXISTS "Invoice_TaxRates" (
     "id" UUID NOT NULL,
     "name" TEXT NOT NULL,
     "rate" DECIMAL(5,2) NOT NULL,
@@ -119,7 +142,7 @@ CREATE TABLE "Invoice_TaxRates" (
 );
 
 -- CreateTable
-CREATE TABLE "Invoice_Series" (
+CREATE TABLE IF NOT EXISTS "Invoice_Series" (
     "id" UUID NOT NULL,
     "name" TEXT NOT NULL,
     "prefixTemplate" TEXT NOT NULL,
@@ -135,7 +158,7 @@ CREATE TABLE "Invoice_Series" (
 );
 
 -- CreateTable
-CREATE TABLE "Invoice_Currencies" (
+CREATE TABLE IF NOT EXISTS "Invoice_Currencies" (
     "code" VARCHAR(3) NOT NULL,
     "name" TEXT NOT NULL,
     "symbol" TEXT,
@@ -146,7 +169,7 @@ CREATE TABLE "Invoice_Currencies" (
 );
 
 -- CreateTable
-CREATE TABLE "Invoice_Settings" (
+CREATE TABLE IF NOT EXISTS "Invoice_Settings" (
     "id" UUID NOT NULL,
     "baseCurrency" VARCHAR(3) NOT NULL,
     "defaultSeriesId" UUID,
@@ -163,59 +186,98 @@ CREATE TABLE "Invoice_Settings" (
 );
 
 -- CreateIndex
-CREATE INDEX "Invoices_accountId_idx" ON "Invoices"("accountId");
+CREATE INDEX IF NOT EXISTS "Invoices_accountId_idx" ON "Invoices"("accountId");
 
 -- CreateIndex
-CREATE INDEX "Invoices_status_idx" ON "Invoices"("status");
+CREATE INDEX IF NOT EXISTS "Invoices_status_idx" ON "Invoices"("status");
 
 -- CreateIndex
-CREATE INDEX "Invoices_issueDate_idx" ON "Invoices"("issueDate");
+CREATE INDEX IF NOT EXISTS "Invoices_issueDate_idx" ON "Invoices"("issueDate");
 
 -- CreateIndex
-CREATE INDEX "Invoices_dueDate_idx" ON "Invoices"("dueDate");
+CREATE INDEX IF NOT EXISTS "Invoices_dueDate_idx" ON "Invoices"("dueDate");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "Invoices_seriesId_number_key" ON "Invoices"("seriesId", "number");
+CREATE UNIQUE INDEX IF NOT EXISTS "Invoices_seriesId_number_key" ON "Invoices"("seriesId", "number");
 
 -- CreateIndex
-CREATE INDEX "Invoice_LineItems_invoiceId_idx" ON "Invoice_LineItems"("invoiceId");
+CREATE INDEX IF NOT EXISTS "Invoice_LineItems_invoiceId_idx" ON "Invoice_LineItems"("invoiceId");
 
 -- CreateIndex
-CREATE INDEX "Invoice_Payments_invoiceId_idx" ON "Invoice_Payments"("invoiceId");
+CREATE INDEX IF NOT EXISTS "Invoice_Payments_invoiceId_idx" ON "Invoice_Payments"("invoiceId");
 
 -- CreateIndex
-CREATE INDEX "Invoice_Attachments_invoiceId_idx" ON "Invoice_Attachments"("invoiceId");
+CREATE INDEX IF NOT EXISTS "Invoice_Attachments_invoiceId_idx" ON "Invoice_Attachments"("invoiceId");
 
 -- CreateIndex
-CREATE INDEX "Invoice_Activity_invoiceId_idx" ON "Invoice_Activity"("invoiceId");
+CREATE INDEX IF NOT EXISTS "Invoice_Activity_invoiceId_idx" ON "Invoice_Activity"("invoiceId");
 
 -- AddForeignKey
-ALTER TABLE "Invoices" ADD CONSTRAINT "Invoices_createdBy_fkey" FOREIGN KEY ("createdBy") REFERENCES "Users"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+DO $$ BEGIN
+    ALTER TABLE "Invoices" ADD CONSTRAINT "Invoices_createdBy_fkey" FOREIGN KEY ("createdBy") REFERENCES "Users"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
 
 -- AddForeignKey
-ALTER TABLE "Invoices" ADD CONSTRAINT "Invoices_seriesId_fkey" FOREIGN KEY ("seriesId") REFERENCES "Invoice_Series"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+DO $$ BEGIN
+    ALTER TABLE "Invoices" ADD CONSTRAINT "Invoices_seriesId_fkey" FOREIGN KEY ("seriesId") REFERENCES "Invoice_Series"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
 
 -- AddForeignKey
-ALTER TABLE "Invoices" ADD CONSTRAINT "Invoices_accountId_fkey" FOREIGN KEY ("accountId") REFERENCES "crm_Accounts"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+DO $$ BEGIN
+    ALTER TABLE "Invoices" ADD CONSTRAINT "Invoices_accountId_fkey" FOREIGN KEY ("accountId") REFERENCES "crm_Accounts"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
 
 -- AddForeignKey
-ALTER TABLE "Invoices" ADD CONSTRAINT "Invoices_originalInvoiceId_fkey" FOREIGN KEY ("originalInvoiceId") REFERENCES "Invoices"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+DO $$ BEGIN
+    ALTER TABLE "Invoices" ADD CONSTRAINT "Invoices_originalInvoiceId_fkey" FOREIGN KEY ("originalInvoiceId") REFERENCES "Invoices"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
 
 -- AddForeignKey
-ALTER TABLE "Invoice_LineItems" ADD CONSTRAINT "Invoice_LineItems_invoiceId_fkey" FOREIGN KEY ("invoiceId") REFERENCES "Invoices"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+DO $$ BEGIN
+    ALTER TABLE "Invoice_LineItems" ADD CONSTRAINT "Invoice_LineItems_invoiceId_fkey" FOREIGN KEY ("invoiceId") REFERENCES "Invoices"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
 
 -- AddForeignKey
-ALTER TABLE "Invoice_LineItems" ADD CONSTRAINT "Invoice_LineItems_productId_fkey" FOREIGN KEY ("productId") REFERENCES "crm_Products"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+DO $$ BEGIN
+    ALTER TABLE "Invoice_LineItems" ADD CONSTRAINT "Invoice_LineItems_productId_fkey" FOREIGN KEY ("productId") REFERENCES "crm_Products"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
 
 -- AddForeignKey
-ALTER TABLE "Invoice_LineItems" ADD CONSTRAINT "Invoice_LineItems_taxRateId_fkey" FOREIGN KEY ("taxRateId") REFERENCES "Invoice_TaxRates"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+DO $$ BEGIN
+    ALTER TABLE "Invoice_LineItems" ADD CONSTRAINT "Invoice_LineItems_taxRateId_fkey" FOREIGN KEY ("taxRateId") REFERENCES "Invoice_TaxRates"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
 
 -- AddForeignKey
-ALTER TABLE "Invoice_Payments" ADD CONSTRAINT "Invoice_Payments_invoiceId_fkey" FOREIGN KEY ("invoiceId") REFERENCES "Invoices"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+DO $$ BEGIN
+    ALTER TABLE "Invoice_Payments" ADD CONSTRAINT "Invoice_Payments_invoiceId_fkey" FOREIGN KEY ("invoiceId") REFERENCES "Invoices"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
 
 -- AddForeignKey
-ALTER TABLE "Invoice_Attachments" ADD CONSTRAINT "Invoice_Attachments_invoiceId_fkey" FOREIGN KEY ("invoiceId") REFERENCES "Invoices"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+DO $$ BEGIN
+    ALTER TABLE "Invoice_Attachments" ADD CONSTRAINT "Invoice_Attachments_invoiceId_fkey" FOREIGN KEY ("invoiceId") REFERENCES "Invoices"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
 
 -- AddForeignKey
-ALTER TABLE "Invoice_Activity" ADD CONSTRAINT "Invoice_Activity_invoiceId_fkey" FOREIGN KEY ("invoiceId") REFERENCES "Invoices"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-
+DO $$ BEGIN
+    ALTER TABLE "Invoice_Activity" ADD CONSTRAINT "Invoice_Activity_invoiceId_fkey" FOREIGN KEY ("invoiceId") REFERENCES "Invoices"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
