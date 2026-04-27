@@ -1,13 +1,13 @@
 -- AlterTable: add company details to Invoice_Settings
 ALTER TABLE "Invoice_Settings"
-  ADD COLUMN "companyName"    TEXT,
-  ADD COLUMN "companyAddress" TEXT,
-  ADD COLUMN "companyCity"    TEXT,
-  ADD COLUMN "companyZip"     TEXT,
-  ADD COLUMN "companyCountry" TEXT,
-  ADD COLUMN "companyVatId"   TEXT,
-  ADD COLUMN "companyTaxId"   TEXT,
-  ADD COLUMN "companyRegNo"   TEXT,
-  ADD COLUMN "companyEmail"   TEXT,
-  ADD COLUMN "companyPhone"   TEXT,
-  ADD COLUMN "companyWebsite" TEXT;
+  ADD COLUMN IF NOT EXISTS "companyName"    TEXT,
+  ADD COLUMN IF NOT EXISTS "companyAddress" TEXT,
+  ADD COLUMN IF NOT EXISTS "companyCity"    TEXT,
+  ADD COLUMN IF NOT EXISTS "companyZip"     TEXT,
+  ADD COLUMN IF NOT EXISTS "companyCountry" TEXT,
+  ADD COLUMN IF NOT EXISTS "companyVatId"   TEXT,
+  ADD COLUMN IF NOT EXISTS "companyTaxId"   TEXT,
+  ADD COLUMN IF NOT EXISTS "companyRegNo"   TEXT,
+  ADD COLUMN IF NOT EXISTS "companyEmail"   TEXT,
+  ADD COLUMN IF NOT EXISTS "companyPhone"   TEXT,
+  ADD COLUMN IF NOT EXISTS "companyWebsite" TEXT;
