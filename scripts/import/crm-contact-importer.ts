@@ -1,36 +1,30 @@
 #!/usr/bin/env node
 
 /**
- * Amazon Connect CSV → NextCRM Contact Importer
+ * Amazon Connect CSV → NextCRM Contact Importer (Simplified)
  * 
- * This script imports contacts from an Amazon Connect CSV export into NextCRM.
- * It follows the mapping defined in CSV_IMPORT_MAPPING_UPDATED.md
+ * Imports contacts from Amazon Connect CSV without dedup or fallback logic.
+ * - Every record has an email (no dedup needed)
+ * - No duplicate emails in dataset
+ * - Direct field mapping
  * 
  * Usage:
- *   npx ts-node scripts/import/crm-contact-importer.ts <csv-file-path>
- * 
- * Example:
- *   npx ts-node scripts/import/crm-contact-importer.ts scripts/import/test-contacts.csv
+ *   npx tsx scripts/import/crm-contact-importer.ts <csv-file-path>
  */
 
 import fs from 'fs';
-import path from 'path';
 import { prismadb } from '@/lib/prisma';
 
 interface ImportResult {
   success: number;
-  duplicates: number;
   errors: number;
-  skipped: number;
   errorLog: Array<{ row: number; email: string; reason: string }>;
 }
 
 class ContactImporter {
   private results: ImportResult = {
     success: 0,
-    duplicates: 0,
     errors: 0,
-    skipped: 0,
     errorLog: [],
   };
 
@@ -51,7 +45,7 @@ class ContactImporter {
       if (char === '"') {
         if (inQuotes && nextChar === '"') {
           current += '"';
-          i++; // Skip next quote
+          i++;
         } else {
           inQuotes = !inQuotes;
         }
@@ -71,19 +65,19 @@ class ContactImporter {
    * Parse name from full name string
    */
   private parseName(fullName?: string): { firstName?: string; lastName?: string } {
-    if (!fullName) return {};
+    if (!fullName || fullName.trim().length === 0) return {};
     const parts = fullName.trim().split(/\s+/);
     if (parts.length === 0) return {};
     const firstName = parts[0];
-    const lastName = parts.slice(1).join(' ') || '';
-    return { firstName: firstName || undefined, lastName: lastName || undefined };
+    const lastName = parts.slice(1).join(' ') || undefined;
+    return { firstName: firstName || undefined, lastName };
   }
 
   /**
    * Convert string to boolean
    */
   private toBoolean(value?: string): boolean | null {
-    if (!value) return null;
+    if (!value || value.trim().length === 0) return null;
     const lower = value.toString().toLowerCase().trim();
     return ['true', '1', 'yes'].includes(lower) ? true : false;
   }
@@ -96,21 +90,14 @@ class ContactImporter {
     state?: string;
     country?: string;
   } {
-    if (!addressStr) return {};
+    if (!addressStr || addressStr.trim().length === 0) return {};
 
-    const result: {
-      city?: string;
-      state?: string;
-      country?: string;
-    } = {};
-
-    // Split on comma and spaces
+    const result: { city?: string; state?: string; country?: string } = {};
     const parts = addressStr
       .split(/[,\s]+/)
       .map((p) => p.trim())
       .filter((p) => p.length > 0);
 
-    // Very basic parsing - try to identify components
     if (parts.length >= 1) result.city = parts[0];
     if (parts.length >= 2) result.state = parts[1];
     if (parts.length >= 3) result.country = parts[parts.length - 1];
@@ -122,19 +109,16 @@ class ContactImporter {
    * Parse Mailchimp tags from string
    */
   private parseTags(tagsStr?: string): string[] {
-    if (!tagsStr) return ['imported-from-amazon-connect'];
+    if (!tagsStr || tagsStr.trim().length === 0) {
+      return ['imported-from-amazon-connect'];
+    }
 
-    // Remove quotes and split
-    const cleaned = tagsStr
-      .replace(/^["']|["']$/g, '')
-      .replace(/["']/g, '');
-
+    const cleaned = tagsStr.replace(/^["']|["']$/g, '').replace(/["']/g, '');
     const tags = cleaned
       .split(/\s+/)
       .map((t) => t.trim())
       .filter((t) => t.length > 0);
 
-    // Always add import tag
     const uniqueTags = Array.from(new Set([...tags, 'imported-from-amazon-connect']));
     return uniqueTags;
   }
@@ -152,11 +136,9 @@ class ContactImporter {
       notes.push(`MailchimpDateCreated: ${row['Attributes.MailchimpDateCreated']}`);
     }
 
-    // If address parsing failed, store full address in notes
     const addressStr = row['Attributes.MailchimpStreetAddress'];
-    if (addressStr) {
+    if (addressStr && addressStr.trim().length > 0) {
       const parsed = this.parseAddress(addressStr);
-      // If we couldn't parse it well, save the original
       if (!parsed.city && !parsed.state && !parsed.country) {
         notes.push(`MailchimpStreetAddress: ${addressStr}`);
       }
@@ -169,11 +151,12 @@ class ContactImporter {
    * Transform CSV row to contact data
    */
   private transformRow(row: Record<string, string>): any {
-    let firstName = row.FirstName;
-    let lastName = row.LastName;
-    const email = row.PersonalEmailAddress;
+    // Use names as-is from CSV
+    let firstName = row.FirstName?.trim() || undefined;
+    let lastName = row.LastName?.trim() || undefined;
+    const email = row.PersonalEmailAddress?.trim();
 
-    // Enrich names from Mailchimp/Stripe data if primary is missing
+    // Enrich names from Mailchimp/Stripe ONLY if primary is missing
     if (!firstName || !lastName) {
       const mailchimpName = this.parseName(row['Attributes.MailchimpFullName']);
       if (mailchimpName.firstName && !firstName) firstName = mailchimpName.firstName;
@@ -192,19 +175,10 @@ class ContactImporter {
       if (guestName.lastName && !lastName) lastName = guestName.lastName;
     }
 
-    // Last name fallback: use email if no last name
-    if (!lastName) {
-      if (email) {
-        lastName = email;
-      } else {
-        return null; // Cannot create contact without last_name
-      }
-    }
-
     // Parse address (primary sources)
-    let city = row['Attributes.City'];
-    let state = row['Attributes.State'];
-    let country = row['Attributes.Country'];
+    let city = row['Attributes.City']?.trim() || undefined;
+    let state = row['Attributes.State']?.trim() || undefined;
+    let country = row['Attributes.Country']?.trim() || undefined;
 
     // Fallback: parse from Mailchimp address if primary missing
     if (!city || !state || !country) {
@@ -214,28 +188,27 @@ class ContactImporter {
       if (addressParts.country && !country) country = addressParts.country;
     }
 
-    // Build the contact data object
+    // Build contact data
     const contactData: any = {
-      first_name: firstName || undefined,
-      last_name: lastName,
-      email: email || undefined,
+      first_name: firstName,
+      last_name: lastName || email, // Use email as last_name fallback if no last_name
+      email: email,
       status: true,
       tags: this.parseTags(row['Attributes.MailchimpTags']),
       notes: this.buildNotes(row),
-      // Custom fields
-      city: city || undefined,
-      country: country || undefined,
-      state: state || undefined,
+      city,
+      country,
+      state,
       is_b2b: this.toBoolean(row['Attributes.IsB2B']),
-      b2b_discount_percent: row['Attributes.B2BDiscountPercent'] || undefined,
-      contact_origin: row['Attributes.ContactOrigin'] || undefined,
-      cumulative_order_count: row['Attributes.CumulativeOrderCount'] || undefined,
-      first_order_date: row['Attributes.FirstOrderDate'] || undefined,
+      b2b_discount_percent: row['Attributes.B2BDiscountPercent']?.trim() || undefined,
+      contact_origin: row['Attributes.ContactOrigin']?.trim() || undefined,
+      cumulative_order_count: row['Attributes.CumulativeOrderCount']?.trim() || undefined,
+      first_order_date: row['Attributes.FirstOrderDate']?.trim() || undefined,
       is_temporary: this.toBoolean(row['Attributes.IsTemporary']),
-      last_order_date: row['Attributes.LastOrderDate'] || undefined,
-      last_order_id: row['Attributes.LastOrderId'] || undefined,
-      opt_in_time: row['Attributes.OptInTime'] || undefined,
-      stripe_customer_id: row['Attributes.StripeCustomerId'] || undefined,
+      last_order_date: row['Attributes.LastOrderDate']?.trim() || undefined,
+      last_order_id: row['Attributes.LastOrderId']?.trim() || undefined,
+      opt_in_time: row['Attributes.OptInTime']?.trim() || undefined,
+      stripe_customer_id: row['Attributes.StripeCustomerId']?.trim() || undefined,
     };
 
     // Remove undefined values
@@ -247,59 +220,21 @@ class ContactImporter {
   }
 
   /**
-   * Check if contact already exists by email
-   */
-  private async checkDuplicate(email?: string): Promise<boolean> {
-    if (!email) return false;
-    const existing = await prismadb.crm_Contacts.findFirst({
-      where: { email, deletedAt: null },
-    });
-    return !!existing;
-  }
-
-  /**
    * Import a single contact
    */
   private async importContact(row: Record<string, string>): Promise<void> {
     this.rowNumber++;
 
     try {
-      // Transform row
       const contactData = this.transformRow(row);
-      if (!contactData) {
-        this.results.skipped++;
-        this.results.errorLog.push({
-          row: this.rowNumber,
-          email: row.PersonalEmailAddress || 'N/A',
-          reason: 'Missing required fields (first_name + last_name)',
-        });
-        return;
-      }
 
-      const email = row.PersonalEmailAddress;
-
-      // Check for duplicates
-      const isDuplicate = await this.checkDuplicate(email);
-      if (isDuplicate) {
-        this.results.duplicates++;
-        this.results.errorLog.push({
-          row: this.rowNumber,
-          email: email || 'N/A',
-          reason: 'Duplicate email already exists',
-        });
-        return;
-      }
-
-      // Create contact
+      // Create contact (no dedup checks)
       await prismadb.crm_Contacts.create({
-        data: {
-          ...contactData,
-          last_name: contactData.last_name,
-        },
+        data: contactData,
       });
 
       this.results.success++;
-      console.log(`✓ Row ${this.rowNumber}: ${contactData.first_name || ''} ${contactData.last_name}`);
+      console.log(`✓ Row ${this.rowNumber}: ${contactData.first_name} ${contactData.last_name}`);
     } catch (error: any) {
       this.results.errors++;
       const errorMsg = error?.message || String(error);
@@ -316,7 +251,6 @@ class ContactImporter {
    * Run the import
    */
   public async run(csvFilePath: string): Promise<void> {
-    // Validate file exists
     if (!fs.existsSync(csvFilePath)) {
       console.error(`❌ CSV file not found: ${csvFilePath}`);
       process.exit(1);
@@ -324,7 +258,6 @@ class ContactImporter {
 
     console.log(`\n🚀 Starting import from: ${csvFilePath}\n`);
 
-    // Read CSV file
     const content = fs.readFileSync(csvFilePath, 'utf-8');
     const lines = content.split('\n').filter((line) => line.trim());
 
@@ -333,11 +266,9 @@ class ContactImporter {
       process.exit(1);
     }
 
-    // Parse header
     const headerLine = lines[0];
     const headers = this.parseCSVLine(headerLine);
 
-    // Process data rows
     for (let i = 1; i < lines.length; i++) {
       const line = lines[i].trim();
       if (!line) continue;
@@ -359,15 +290,13 @@ class ContactImporter {
    * Print import summary
    */
   private printSummary(): void {
-    const total = this.results.success + this.results.duplicates + this.results.errors + this.results.skipped;
+    const total = this.results.success + this.results.errors;
 
     console.log('\n' + '='.repeat(60));
     console.log('📊 IMPORT SUMMARY');
     console.log('='.repeat(60));
     console.log(`Total rows processed:  ${total}`);
     console.log(`✓ Successfully created: ${this.results.success}`);
-    console.log(`⚠ Duplicates skipped:   ${this.results.duplicates}`);
-    console.log(`⚠ Skipped (missing):    ${this.results.skipped}`);
     console.log(`✗ Errors:               ${this.results.errors}`);
     console.log('='.repeat(60));
 
@@ -382,13 +311,12 @@ class ContactImporter {
   }
 }
 
-// Main
 async function main() {
   const csvFilePath = process.argv[2];
 
   if (!csvFilePath) {
-    console.error('❌ Usage: npx ts-node scripts/import/crm-contact-importer.ts <csv-file-path>');
-    console.error('Example: npx ts-node scripts/import/crm-contact-importer.ts scripts/import/test-contacts.csv');
+    console.error('❌ Usage: npx tsx scripts/import/crm-contact-importer.ts <csv-file-path>');
+    console.error('Example: npx tsx scripts/import/crm-contact-importer.ts scripts/import/test-contacts.csv');
     process.exit(1);
   }
 
