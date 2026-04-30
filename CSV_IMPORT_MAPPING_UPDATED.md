@@ -37,7 +37,7 @@ This mapping incorporates 13 new custom fields added to the `crm_Contacts` model
 | **Attributes.MailchimpTags** | `tags[]` | Array | Parse array and add directly; also add implicit tag `"imported-from-amazon-connect"` | Each tag becomes array element |
 | **Attributes.OptInTime** | `opt_in_time` | String (text) | Use as-is (keep in original format) | When contact opted in; stored as text |
 | **Attributes.State** | `state` | String | Use as-is; attempt parse from MailchimpStreetAddress if primary is missing | State/province abbreviation or name |
-| **Attributes.StripeCreateDate** | `created_on` | DateTime | Use as contact creation date if available | Preserves original Stripe signup date |
+| **Attributes.StripeCreateDate** | `first_order_date` | String (text) | Use as-is; preserved as legacy data in custom field | First order date stored separately; `created_on` will auto-populate with import date |
 | **Attributes.StripeCustomerId** | `stripe_customer_id` | String | Use as-is | Stripe customer reference ID |
 | **Attributes.StripeName** | `first_name` + `last_name` | String | **Parse logic**: Split on space (first word = first_name, rest = last_name); only populate if existing first_name/last_name are empty | Enrichment/correction field; use only as fallback |
 
@@ -51,7 +51,7 @@ This mapping incorporates 13 new custom fields added to the `crm_Contacts` model
 | `status` | Default: `true` | All imported contacts marked as Active unless flagged with `is_temporary: true` |
 | `tags[]` | CSV: **Attributes.MailchimpTags** + implicit tag | Always add `"imported-from-amazon-connect"` to tags for import tracking |
 | `notes[]` | Multiple fields (see "Appended Notes" section below) | Array of structured note entries for unmapped date/time fields |
-| `created_on` | CSV: **Attributes.StripeCreateDate** or auto | Preserves original contact creation date when available |
+| `created_on` | Auto-populated | Set to import date (today); all records have same creation date for clean tracking |
 
 ---
 
@@ -227,7 +227,7 @@ FOR EACH row in CSV:
   
   7. Collect tags: Parse MailchimpTags; add "imported-from-amazon-connect"
   
-  8. Set timestamps: Use StripeCreateDate as created_on if available
+  8. Skip timestamp mapping: Let created_on auto-populate with today's date
   
   9. Populate custom fields:
      - b2b_discount_percent
