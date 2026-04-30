@@ -1,15 +1,10 @@
 #!/usr/bin/env node
 
 /**
- * Amazon Connect CSV → NextCRM Contact Importer (Simplified)
+ * Amazon Connect CSV → NextCRM Contact Importer (Position-Based)
  * 
- * Imports contacts from Amazon Connect CSV without dedup or fallback logic.
- * - Every record has an email (no dedup needed)
- * - No duplicate emails in dataset
- * - Direct field mapping
- * 
- * Usage:
- *   npx tsx scripts/import/crm-contact-importer.ts <csv-file-path>
+ * Uses column positions instead of header names for reliable parsing.
+ * Column positions verified from Amazon Connect export format.
  */
 
 import fs from 'fs';
@@ -18,8 +13,35 @@ import { prismadb } from '@/lib/prisma';
 interface ImportResult {
   success: number;
   errors: number;
-  errorLog: Array<{ row: number; email: string; reason: string }>;
+  errorLog: Array<{ row: number; name: string; reason: string }>;
 }
+
+// Column positions (0-indexed)
+const COLUMN_MAP = {
+  firstName: 5,              // Column 6
+  lastName: 7,               // Column 8
+  personalEmail: 15,         // Column 16
+  b2bDiscountPercent: 60,    // Column 61
+  city: 61,                  // Column 62
+  contactOrigin: 63,         // Column 64
+  country: 64,               // Column 65
+  cumulativeOrderCount: 65,  // Column 66
+  firstOrderDate: 66,        // Column 67
+  guestStripeName: 67,       // Column 68
+  isB2B: 68,                 // Column 69
+  isTemporary: 69,           // Column 70
+  lastOrderDate: 70,         // Column 71
+  lastOrderId: 71,           // Column 72
+  mailchimpDateCreated: 73,  // Column 74
+  mailchimpFullName: 74,     // Column 75
+  mailchimpStreetAddress: 75, // Column 76
+  mailchimpTags: 76,         // Column 77
+  optInTime: 77,             // Column 78
+  state: 79,                 // Column 80
+  stripeCreateDate: 81,      // Column 82 (used for created_on - but we're not using it)
+  stripeCustomerId: 81,      // Column 82
+  stripeName: 82,            // Column 83
+};
 
 class ContactImporter {
   private results: ImportResult = {
@@ -31,12 +53,9 @@ class ContactImporter {
   private rowNumber = 0;
 
   /**
-   * Parse line - handles both CSV (comma) and TSV (tab) delimiters
+   * Parse CSV line
    */
   private parseLine(line: string): string[] {
-    // Detect delimiter: if line contains tabs, use tab; otherwise use comma
-    const delimiter = line.includes('\t') ? '\t' : ',';
-
     const result: string[] = [];
     let current = '';
     let inQuotes = false;
@@ -52,7 +71,7 @@ class ContactImporter {
         } else {
           inQuotes = !inQuotes;
         }
-      } else if (char === delimiter && !inQuotes) {
+      } else if (char === ',' && !inQuotes) {
         result.push(current);
         current = '';
       } else {
@@ -129,18 +148,21 @@ class ContactImporter {
   /**
    * Build notes array from unmapped fields
    */
-  private buildNotes(row: Record<string, string>): string[] {
+  private buildNotes(values: string[]): string[] {
     const notes: string[] = [];
 
-    if (row['Attributes.ConfirmTime']) {
-      notes.push(`ConfirmTime: ${row['Attributes.ConfirmTime']}`);
-    }
-    if (row['Attributes.MailchimpDateCreated']) {
-      notes.push(`MailchimpDateCreated: ${row['Attributes.MailchimpDateCreated']}`);
+    const confirmTime = values[COLUMN_MAP.contactOrigin]?.trim();
+    if (confirmTime) {
+      notes.push(`ConfirmTime: ${confirmTime}`);
     }
 
-    const addressStr = row['Attributes.MailchimpStreetAddress'];
-    if (addressStr && addressStr.trim().length > 0) {
+    const mailchimpDate = values[COLUMN_MAP.mailchimpDateCreated]?.trim();
+    if (mailchimpDate) {
+      notes.push(`MailchimpDateCreated: ${mailchimpDate}`);
+    }
+
+    const addressStr = values[COLUMN_MAP.mailchimpStreetAddress]?.trim();
+    if (addressStr) {
       const parsed = this.parseAddress(addressStr);
       if (!parsed.city && !parsed.state && !parsed.country) {
         notes.push(`MailchimpStreetAddress: ${addressStr}`);
@@ -151,41 +173,50 @@ class ContactImporter {
   }
 
   /**
-   * Transform CSV row to contact data
+   * Transform CSV row to contact data (position-based)
    */
-  private transformRow(row: Record<string, string>): any {
-    // Use names as-is from CSV
-    let firstName = row.FirstName?.trim() || undefined;
-    let lastName = row.LastName?.trim() || undefined;
-    const email = row.PersonalEmailAddress?.trim();
+  private transformRow(values: string[]): any {
+    // Extract by position
+    let firstName = values[COLUMN_MAP.firstName]?.trim() || undefined;
+    let lastName = values[COLUMN_MAP.lastName]?.trim() || undefined;
+    const email = values[COLUMN_MAP.personalEmail]?.trim();
 
-    // Enrich names from Mailchimp/Stripe ONLY if primary is missing
+    // Enrich names from Mailchimp/Stripe if primary is missing
     if (!firstName || !lastName) {
-      const mailchimpName = this.parseName(row['Attributes.MailchimpFullName']);
+      const mailchimpName = this.parseName(values[COLUMN_MAP.mailchimpFullName]?.trim());
       if (mailchimpName.firstName && !firstName) firstName = mailchimpName.firstName;
       if (mailchimpName.lastName && !lastName) lastName = mailchimpName.lastName;
     }
 
     if (!firstName || !lastName) {
-      const stripeName = this.parseName(row['Attributes.StripeName']);
+      const stripeName = this.parseName(values[COLUMN_MAP.stripeName]?.trim());
       if (stripeName.firstName && !firstName) firstName = stripeName.firstName;
       if (stripeName.lastName && !lastName) lastName = stripeName.lastName;
     }
 
     if (!firstName || !lastName) {
-      const guestName = this.parseName(row['Attributes.GuestStripeName']);
+      const guestName = this.parseName(values[COLUMN_MAP.guestStripeName]?.trim());
       if (guestName.firstName && !firstName) firstName = guestName.firstName;
       if (guestName.lastName && !lastName) lastName = guestName.lastName;
     }
 
+    // Last name fallback
+    if (!lastName) {
+      if (email) {
+        lastName = email;
+      } else {
+        return null;
+      }
+    }
+
     // Parse address (primary sources)
-    let city = row['Attributes.City']?.trim() || undefined;
-    let state = row['Attributes.State']?.trim() || undefined;
-    let country = row['Attributes.Country']?.trim() || undefined;
+    let city = values[COLUMN_MAP.city]?.trim() || undefined;
+    let state = values[COLUMN_MAP.state]?.trim() || undefined;
+    let country = values[COLUMN_MAP.country]?.trim() || undefined;
 
     // Fallback: parse from Mailchimp address if primary missing
     if (!city || !state || !country) {
-      const addressParts = this.parseAddress(row['Attributes.MailchimpStreetAddress']);
+      const addressParts = this.parseAddress(values[COLUMN_MAP.mailchimpStreetAddress]?.trim());
       if (addressParts.city && !city) city = addressParts.city;
       if (addressParts.state && !state) state = addressParts.state;
       if (addressParts.country && !country) country = addressParts.country;
@@ -194,24 +225,24 @@ class ContactImporter {
     // Build contact data
     const contactData: any = {
       first_name: firstName,
-      last_name: lastName || email, // Use email as last_name fallback if no last_name
+      last_name: lastName,
       email: email,
       status: true,
-      tags: this.parseTags(row['Attributes.MailchimpTags']),
-      notes: this.buildNotes(row),
+      tags: this.parseTags(values[COLUMN_MAP.mailchimpTags]?.trim()),
+      notes: this.buildNotes(values),
       city,
       country,
       state,
-      is_b2b: this.toBoolean(row['Attributes.IsB2B']),
-      b2b_discount_percent: row['Attributes.B2BDiscountPercent']?.trim() || undefined,
-      contact_origin: row['Attributes.ContactOrigin']?.trim() || undefined,
-      cumulative_order_count: row['Attributes.CumulativeOrderCount']?.trim() || undefined,
-      first_order_date: row['Attributes.FirstOrderDate']?.trim() || undefined,
-      is_temporary: this.toBoolean(row['Attributes.IsTemporary']),
-      last_order_date: row['Attributes.LastOrderDate']?.trim() || undefined,
-      last_order_id: row['Attributes.LastOrderId']?.trim() || undefined,
-      opt_in_time: row['Attributes.OptInTime']?.trim() || undefined,
-      stripe_customer_id: row['Attributes.StripeCustomerId']?.trim() || undefined,
+      is_b2b: this.toBoolean(values[COLUMN_MAP.isB2B]?.trim()),
+      b2b_discount_percent: values[COLUMN_MAP.b2bDiscountPercent]?.trim() || undefined,
+      contact_origin: values[COLUMN_MAP.contactOrigin]?.trim() || undefined,
+      cumulative_order_count: values[COLUMN_MAP.cumulativeOrderCount]?.trim() || undefined,
+      first_order_date: values[COLUMN_MAP.firstOrderDate]?.trim() || undefined,
+      is_temporary: this.toBoolean(values[COLUMN_MAP.isTemporary]?.trim()),
+      last_order_date: values[COLUMN_MAP.lastOrderDate]?.trim() || undefined,
+      last_order_id: values[COLUMN_MAP.lastOrderId]?.trim() || undefined,
+      opt_in_time: values[COLUMN_MAP.optInTime]?.trim() || undefined,
+      stripe_customer_id: values[COLUMN_MAP.stripeCustomerId]?.trim() || undefined,
     };
 
     // Remove undefined values
@@ -225,13 +256,21 @@ class ContactImporter {
   /**
    * Import a single contact
    */
-  private async importContact(row: Record<string, string>): Promise<void> {
+  private async importContact(values: string[]): Promise<void> {
     this.rowNumber++;
 
     try {
-      const contactData = this.transformRow(row);
+      const contactData = this.transformRow(values);
+      if (!contactData) {
+        this.results.errors++;
+        this.results.errorLog.push({
+          row: this.rowNumber,
+          name: 'N/A',
+          reason: 'Missing required fields',
+        });
+        return;
+      }
 
-      // Create contact (no dedup checks)
       await prismadb.crm_Contacts.create({
         data: contactData,
       });
@@ -243,7 +282,7 @@ class ContactImporter {
       const errorMsg = error?.message || String(error);
       this.results.errorLog.push({
         row: this.rowNumber,
-        email: row.PersonalEmailAddress || 'N/A',
+        name: `${values[COLUMN_MAP.firstName]} ${values[COLUMN_MAP.lastName]}`,
         reason: errorMsg,
       });
       console.error(`✗ Row ${this.rowNumber}: ${errorMsg}`);
@@ -269,21 +308,13 @@ class ContactImporter {
       process.exit(1);
     }
 
-    const headerLine = lines[0];
-    const headers = this.parseLine(headerLine);
-
+    // Skip header line, process data rows
     for (let i = 1; i < lines.length; i++) {
       const line = lines[i].trim();
       if (!line) continue;
 
       const values = this.parseLine(line);
-      const row: Record<string, string> = {};
-
-      headers.forEach((header, index) => {
-        row[header] = values[index] || '';
-      });
-
-      await this.importContact(row);
+      await this.importContact(values);
     }
 
     this.printSummary();
@@ -306,7 +337,7 @@ class ContactImporter {
     if (this.results.errorLog.length > 0) {
       console.log('\n❌ Error Details:\n');
       this.results.errorLog.forEach((log) => {
-        console.log(`  Row ${log.row} (${log.email}): ${log.reason}`);
+        console.log(`  Row ${log.row} (${log.name}): ${log.reason}`);
       });
     }
 
