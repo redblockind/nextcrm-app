@@ -31,9 +31,12 @@ class ContactImporter {
   private rowNumber = 0;
 
   /**
-   * Parse CSV line (basic CSV parsing)
+   * Parse line - handles both CSV (comma) and TSV (tab) delimiters
    */
-  private parseCSVLine(line: string): string[] {
+  private parseLine(line: string): string[] {
+    // Detect delimiter: if line contains tabs, use tab; otherwise use comma
+    const delimiter = line.includes('\t') ? '\t' : ',';
+
     const result: string[] = [];
     let current = '';
     let inQuotes = false;
@@ -49,7 +52,7 @@ class ContactImporter {
         } else {
           inQuotes = !inQuotes;
         }
-      } else if (char === ',' && !inQuotes) {
+      } else if (char === delimiter && !inQuotes) {
         result.push(current);
         current = '';
       } else {
@@ -267,13 +270,13 @@ class ContactImporter {
     }
 
     const headerLine = lines[0];
-    const headers = this.parseCSVLine(headerLine);
+    const headers = this.parseLine(headerLine);
 
     for (let i = 1; i < lines.length; i++) {
       const line = lines[i].trim();
       if (!line) continue;
 
-      const values = this.parseCSVLine(line);
+      const values = this.parseLine(line);
       const row: Record<string, string> = {};
 
       headers.forEach((header, index) => {
