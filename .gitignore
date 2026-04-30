@@ -49,6 +49,10 @@ next-env.d.ts
 # migration logs (may contain secrets)
 migration-errors.log
 
+# Import data (do not commit customer data)
+scripts/import/*.csv
+scripts/import/logs/
+
 # backups
 backups/
 
