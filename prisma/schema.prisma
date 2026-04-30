@@ -480,6 +480,21 @@ model crm_Contacts {
   tags             String[]
   notes            String[]
 
+  // Custom import fields (Amazon Connect CSV migration)
+  city                   String?
+  country                String?
+  state                  String?
+  is_b2b                 Boolean?
+  b2b_discount_percent   String?
+  contact_origin         String?
+  cumulative_order_count String?
+  first_order_date       String?
+  is_temporary           Boolean?
+  last_order_date        String?
+  last_order_id          String?
+  opt_in_time            String?
+  stripe_customer_id     String?
+
   assigned_to_user  Users?                    @relation("assigned_contacts", fields: [assigned_to], references: [id])
   crate_by_user     Users?                    @relation("created_contacts", fields: [created_by], references: [id])
   accountsIDs       String?                   @db.Uuid
