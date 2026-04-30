@@ -7,40 +7,35 @@
  * It follows the mapping defined in CSV_IMPORT_MAPPING_UPDATED.md
  * 
  * Usage:
- *   npx ts-node scripts/import/crm-contact-importer.ts <csv-file-path>
+ *   node scripts/import/crm-contact-importer.js <csv-file-path>
  * 
  * Example:
- *   npx ts-node scripts/import/crm-contact-importer.ts scripts/import/test-contacts.csv
+ *   node scripts/import/crm-contact-importer.js scripts/import/test-contacts.csv
  */
 
-import fs from 'fs';
-import path from 'path';
-import { prismadb } from '@/lib/prisma';
+const fs = require('fs');
+const path = require('path');
+const { PrismaClient } = require('@prisma/client');
 
-interface ImportResult {
-  success: number;
-  duplicates: number;
-  errors: number;
-  skipped: number;
-  errorLog: Array<{ row: number; email: string; reason: string }>;
-}
+const prismadb = new PrismaClient();
 
 class ContactImporter {
-  private results: ImportResult = {
-    success: 0,
-    duplicates: 0,
-    errors: 0,
-    skipped: 0,
-    errorLog: [],
-  };
-
-  private rowNumber = 0;
+  constructor() {
+    this.results = {
+      success: 0,
+      duplicates: 0,
+      errors: 0,
+      skipped: 0,
+      errorLog: [],
+    };
+    this.rowNumber = 0;
+  }
 
   /**
    * Parse CSV line (basic CSV parsing)
    */
-  private parseCSVLine(line: string): string[] {
-    const result: string[] = [];
+  parseCSVLine(line) {
+    const result = [];
     let current = '';
     let inQuotes = false;
 
@@ -70,19 +65,22 @@ class ContactImporter {
   /**
    * Parse name from full name string
    */
-  private parseName(fullName?: string): { firstName?: string; lastName?: string } {
+  parseName(fullName) {
     if (!fullName) return {};
     const parts = fullName.trim().split(/\s+/);
     if (parts.length === 0) return {};
     const firstName = parts[0];
     const lastName = parts.slice(1).join(' ') || '';
-    return { firstName: firstName || undefined, lastName: lastName || undefined };
+    return { 
+      firstName: firstName || undefined, 
+      lastName: lastName || undefined 
+    };
   }
 
   /**
    * Convert string to boolean
    */
-  private toBoolean(value?: string): boolean | null {
+  toBoolean(value) {
     if (!value) return null;
     const lower = value.toString().toLowerCase().trim();
     return ['true', '1', 'yes'].includes(lower) ? true : false;
@@ -91,26 +89,15 @@ class ContactImporter {
   /**
    * Parse Mailchimp street address for city, state, country
    */
-  private parseAddress(addressStr?: string): {
-    city?: string;
-    state?: string;
-    country?: string;
-  } {
+  parseAddress(addressStr) {
     if (!addressStr) return {};
 
-    const result: {
-      city?: string;
-      state?: string;
-      country?: string;
-    } = {};
-
-    // Split on comma and spaces
+    const result = {};
     const parts = addressStr
       .split(/[,\s]+/)
       .map((p) => p.trim())
       .filter((p) => p.length > 0);
 
-    // Very basic parsing - try to identify components
     if (parts.length >= 1) result.city = parts[0];
     if (parts.length >= 2) result.state = parts[1];
     if (parts.length >= 3) result.country = parts[parts.length - 1];
@@ -121,7 +108,7 @@ class ContactImporter {
   /**
    * Parse Mailchimp tags from string
    */
-  private parseTags(tagsStr?: string): string[] {
+  parseTags(tagsStr) {
     if (!tagsStr) return ['imported-from-amazon-connect'];
 
     // Remove quotes and split
@@ -142,8 +129,8 @@ class ContactImporter {
   /**
    * Build notes array from unmapped fields
    */
-  private buildNotes(row: Record<string, string>): string[] {
-    const notes: string[] = [];
+  buildNotes(row) {
+    const notes = [];
 
     if (row['Attributes.ConfirmTime']) {
       notes.push(`ConfirmTime: ${row['Attributes.ConfirmTime']}`);
@@ -152,11 +139,9 @@ class ContactImporter {
       notes.push(`MailchimpDateCreated: ${row['Attributes.MailchimpDateCreated']}`);
     }
 
-    // If address parsing failed, store full address in notes
     const addressStr = row['Attributes.MailchimpStreetAddress'];
     if (addressStr) {
       const parsed = this.parseAddress(addressStr);
-      // If we couldn't parse it well, save the original
       if (!parsed.city && !parsed.state && !parsed.country) {
         notes.push(`MailchimpStreetAddress: ${addressStr}`);
       }
@@ -168,7 +153,7 @@ class ContactImporter {
   /**
    * Transform CSV row to contact data
    */
-  private transformRow(row: Record<string, string>): any {
+  transformRow(row) {
     let firstName = row.FirstName;
     let lastName = row.LastName;
     const email = row.PersonalEmailAddress;
@@ -197,7 +182,7 @@ class ContactImporter {
       if (email) {
         lastName = email;
       } else {
-        return null; // Cannot create contact without last_name
+        return null;
       }
     }
 
@@ -215,14 +200,13 @@ class ContactImporter {
     }
 
     // Build the contact data object
-    const contactData: any = {
+    const contactData = {
       first_name: firstName || undefined,
       last_name: lastName,
       email: email || undefined,
       status: true,
       tags: this.parseTags(row['Attributes.MailchimpTags']),
       notes: this.buildNotes(row),
-      // Custom fields
       city: city || undefined,
       country: country || undefined,
       state: state || undefined,
@@ -249,7 +233,7 @@ class ContactImporter {
   /**
    * Check if contact already exists by email
    */
-  private async checkDuplicate(email?: string): Promise<boolean> {
+  async checkDuplicate(email) {
     if (!email) return false;
     const existing = await prismadb.crm_Contacts.findFirst({
       where: { email, deletedAt: null },
@@ -260,11 +244,10 @@ class ContactImporter {
   /**
    * Import a single contact
    */
-  private async importContact(row: Record<string, string>): Promise<void> {
+  async importContact(row) {
     this.rowNumber++;
 
     try {
-      // Transform row
       const contactData = this.transformRow(row);
       if (!contactData) {
         this.results.skipped++;
@@ -277,8 +260,6 @@ class ContactImporter {
       }
 
       const email = row.PersonalEmailAddress;
-
-      // Check for duplicates
       const isDuplicate = await this.checkDuplicate(email);
       if (isDuplicate) {
         this.results.duplicates++;
@@ -290,7 +271,6 @@ class ContactImporter {
         return;
       }
 
-      // Create contact
       await prismadb.crm_Contacts.create({
         data: {
           ...contactData,
@@ -300,7 +280,7 @@ class ContactImporter {
 
       this.results.success++;
       console.log(`✓ Row ${this.rowNumber}: ${contactData.first_name || ''} ${contactData.last_name}`);
-    } catch (error: any) {
+    } catch (error) {
       this.results.errors++;
       const errorMsg = error?.message || String(error);
       this.results.errorLog.push({
@@ -315,8 +295,7 @@ class ContactImporter {
   /**
    * Run the import
    */
-  public async run(csvFilePath: string): Promise<void> {
-    // Validate file exists
+  async run(csvFilePath) {
     if (!fs.existsSync(csvFilePath)) {
       console.error(`❌ CSV file not found: ${csvFilePath}`);
       process.exit(1);
@@ -324,7 +303,6 @@ class ContactImporter {
 
     console.log(`\n🚀 Starting import from: ${csvFilePath}\n`);
 
-    // Read CSV file
     const content = fs.readFileSync(csvFilePath, 'utf-8');
     const lines = content.split('\n').filter((line) => line.trim());
 
@@ -333,17 +311,15 @@ class ContactImporter {
       process.exit(1);
     }
 
-    // Parse header
     const headerLine = lines[0];
     const headers = this.parseCSVLine(headerLine);
 
-    // Process data rows
     for (let i = 1; i < lines.length; i++) {
       const line = lines[i].trim();
       if (!line) continue;
 
       const values = this.parseCSVLine(line);
-      const row: Record<string, string> = {};
+      const row = {};
 
       headers.forEach((header, index) => {
         row[header] = values[index] || '';
@@ -358,7 +334,7 @@ class ContactImporter {
   /**
    * Print import summary
    */
-  private printSummary(): void {
+  printSummary() {
     const total = this.results.success + this.results.duplicates + this.results.errors + this.results.skipped;
 
     console.log('\n' + '='.repeat(60));
@@ -382,22 +358,23 @@ class ContactImporter {
   }
 }
 
-// Main
 async function main() {
   const csvFilePath = process.argv[2];
 
   if (!csvFilePath) {
-    console.error('❌ Usage: npx ts-node scripts/import/crm-contact-importer.ts <csv-file-path>');
-    console.error('Example: npx ts-node scripts/import/crm-contact-importer.ts scripts/import/test-contacts.csv');
+    console.error('❌ Usage: node scripts/import/crm-contact-importer.js <csv-file-path>');
+    console.error('Example: node scripts/import/crm-contact-importer.js scripts/import/test-contacts.csv');
     process.exit(1);
   }
 
   try {
     const importer = new ContactImporter();
     await importer.run(csvFilePath);
+    await prismadb.$disconnect();
     process.exit(0);
   } catch (error) {
     console.error('❌ Fatal error:', error);
+    await prismadb.$disconnect();
     process.exit(1);
   }
 }
