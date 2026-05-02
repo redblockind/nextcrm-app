@@ -135,11 +135,31 @@ class ContactImporter {
       return ['imported-from-amazon-connect'];
     }
 
-    const cleaned = tagsStr.replace(/^["']|["']$/g, '').replace(/["']/g, '');
-    const tags = cleaned
-      .split(/\s+/)
-      .map((t) => t.trim())
-      .filter((t) => t.length > 0);
+    const tags: string[] = [];
+    let current = '';
+    let inQuotes = false;
+
+    for (let i = 0; i < tagsStr.length; i++) {
+      const char = tagsStr[i];
+
+      if ((char === '"' || char === "'") && (i === 0 || tagsStr[i - 1] !== '\\')) {
+        inQuotes = !inQuotes;
+      } else if ((char === ',' || char === ';') && !inQuotes) {
+        const trimmed = current.trim().replace(/^["']|["']$/g, '');
+        if (trimmed.length > 0) {
+          tags.push(trimmed);
+        }
+        current = '';
+      } else {
+        current += char;
+      }
+    }
+
+    // Add last tag
+    const trimmed = current.trim().replace(/^["']|["']$/g, '');
+    if (trimmed.length > 0) {
+      tags.push(trimmed);
+    }
 
     const uniqueTags = Array.from(new Set([...tags, 'imported-from-amazon-connect']));
     return uniqueTags;
