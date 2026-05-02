@@ -135,31 +135,11 @@ class ContactImporter {
       return ['imported-from-amazon-connect'];
     }
 
-    const tags: string[] = [];
-    let current = '';
-    let inQuotes = false;
-
-    for (let i = 0; i < tagsStr.length; i++) {
-      const char = tagsStr[i];
-
-      if ((char === '"' || char === "'") && (i === 0 || tagsStr[i - 1] !== '\\')) {
-        inQuotes = !inQuotes;
-      } else if ((char === ',' || char === ';') && !inQuotes) {
-        const trimmed = current.trim().replace(/^["']|["']$/g, '');
-        if (trimmed.length > 0) {
-          tags.push(trimmed);
-        }
-        current = '';
-      } else {
-        current += char;
-      }
-    }
-
-    // Add last tag
-    const trimmed = current.trim().replace(/^["']|["']$/g, '');
-    if (trimmed.length > 0) {
-      tags.push(trimmed);
-    }
+    // Extract all quoted strings (anything between opening and closing quotes)
+    const tagMatches = tagsStr.match(/["'][^"']*["']/g) || [];
+    const tags = tagMatches
+      .map((tag) => tag.replace(/^["']|["']$/g, '').trim())
+      .filter((tag) => tag.length > 0);
 
     const uniqueTags = Array.from(new Set([...tags, 'imported-from-amazon-connect']));
     return uniqueTags;
