@@ -356,7 +356,7 @@ export async function BasicView({ data }: OppsViewProps) {
       <div>
         <Card>
           <CardHeader className="pb-3">
-            <CardTitle>Import Data (Amazon Connect)</CardTitle>
+            <CardTitle>Custom Fields</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="grid grid-cols-2 gap-4">
