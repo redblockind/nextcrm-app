@@ -158,7 +158,7 @@ class ContactImporter {
 
     const mailchimpDate = values[COLUMN_MAP.mailchimpDateCreated]?.trim();
     if (mailchimpDate) {
-      notes.push(`MailchimpDateCreated: ${mailchimpDate}`);
+      notes.push(`MailListDateCreated: ${mailchimpDate}`);
     }
 
     const addressStr = values[COLUMN_MAP.mailchimpStreetAddress]?.trim();
