@@ -31,7 +31,7 @@ This mapping incorporates 13 new custom fields added to the `crm_Contacts` model
 | **Attributes.IsTemporary** | `is_temporary` | Boolean | Convert to boolean: "true"/"false"/"TRUE"/"FALSE" → true/false | Marks temporary/test contacts |
 | **Attributes.LastOrderDate** | `last_order_date` | String (text) | Use as-is (keep date in original format) | Most recent purchase date; stored as text |
 | **Attributes.LastOrderId** | `last_order_id` | String | Use as-is | Reference to last order ID |
-| **Attributes.MailchimpDateCreated** | `notes[]` | Array | Append: `"MailchimpDateCreated: {value}"` | Email list signup date; stored as text |
+| **Attributes.MailchimpDateCreated** | `notes[]` | Array | Append: `"MailListDateCreated: {value}"` | Email list signup date; stored as text |
 | **Attributes.MailchimpFullName** | `first_name` + `last_name` | String | **Parse logic**: Split on space (first word = first_name, rest = last_name); only populate if existing first_name/last_name are empty | Enrichment/correction field; use only as fallback |
 | **Attributes.MailchimpStreetAddress** | Parse to city, state, country or notes | String | **Intelligent parsing**: Attempt to extract City, State, PostalCode, Country from mixed text; if parsing fails, store as-is in `notes[]`: `"MailchimpStreetAddress: {full-text}"` | Unpredictable format; parse best-effort |
 | **Attributes.MailchimpTags** | `tags[]` | Array | Parse array and add directly; also add implicit tag `"imported-from-amazon-connect"` | Each tag becomes array element |
@@ -151,14 +151,14 @@ The `notes[]` field will be an array of formatted strings. Only fields without d
 
 ### Fields that go into notes[]:
 - `ConfirmTime` — When contact confirmed
-- `MailchimpDateCreated` — Email list creation date
+- `MailListDateCreated` — Email list creation date
 - `MailchimpStreetAddress` — (if parsing fails)
 
 ### Example notes array for a single contact:
 ```json
 [
   "ConfirmTime: 2026-04-25T00:55:15.821Z",
-  "MailchimpDateCreated: 2026-04-25T00:55:15.821Z",
+  "MailListDateCreated: 2026-04-25T00:55:15.821Z",
   "MailchimpStreetAddress: Oakland Park FL 33334 US"
 ]
 ```

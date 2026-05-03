@@ -136,7 +136,7 @@ class ContactImporter {
       notes.push(`ConfirmTime: ${row['Attributes.ConfirmTime']}`);
     }
     if (row['Attributes.MailchimpDateCreated']) {
-      notes.push(`MailchimpDateCreated: ${row['Attributes.MailchimpDateCreated']}`);
+      notes.push(`MailListDateCreated: ${row['Attributes.MailchimpDateCreated']}`);
     }
 
     const addressStr = row['Attributes.MailchimpStreetAddress'];
