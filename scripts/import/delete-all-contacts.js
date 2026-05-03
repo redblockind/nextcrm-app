@@ -10,8 +10,14 @@ const prisma = new PrismaClient({ adapter });
 async function deleteAllContacts() {
   try {
     console.log('🗑️  Deleting all contacts...');
-    const result = await prisma.crm_Contacts.deleteMany({});
-    console.log(`✓ Deleted ${result.count} contacts`);
+    // crm_Contact_Enrichment.contactId is ON DELETE RESTRICT, so any
+    // enrichment rows must be removed before the contacts themselves.
+    const [enrichments, contacts] = await prisma.$transaction([
+      prisma.crm_Contact_Enrichment.deleteMany({}),
+      prisma.crm_Contacts.deleteMany({}),
+    ]);
+    console.log(`✓ Deleted ${enrichments.count} enrichment records`);
+    console.log(`✓ Deleted ${contacts.count} contacts`);
     await prisma.$disconnect();
     console.log('✅ Done!\n');
     process.exit(0);
