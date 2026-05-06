@@ -44,7 +44,18 @@ describe("email-crypto", () => {
   });
 
   it("throws if EMAIL_ENCRYPTION_KEY contains non-hex characters", () => {
-    process.env.EMAIL_ENCRYPTION_KEY = "z".repeat(64); // valid length, invalid hex
+    process.env.EMAIL_ENCRYPTION_KEY = "!".repeat(64); // valid length, invalid hex and invalid base64
+    expect(() => encrypt("x")).toThrow("EMAIL_ENCRYPTION_KEY");
+  });
+
+  it("accepts a 32-byte base64-encoded key", () => {
+    process.env.EMAIL_ENCRYPTION_KEY = Buffer.alloc(32, 0x11).toString("base64");
+    const plaintext = "mysecretpassword";
+    expect(decrypt(encrypt(plaintext))).toBe(plaintext);
+  });
+
+  it("throws if base64-encoded key does not decode to 32 bytes", () => {
+    process.env.EMAIL_ENCRYPTION_KEY = Buffer.alloc(16, 0x11).toString("base64");
     expect(() => encrypt("x")).toThrow("EMAIL_ENCRYPTION_KEY");
   });
 });
