@@ -6,8 +6,6 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { TipTapEditor } from "@/components/campaigns/TipTapEditor";
-import { createTemplate } from "@/actions/campaigns/templates/create-template";
-import { updateTemplate } from "@/actions/campaigns/templates/update-template";
 import { generateTemplate } from "@/actions/campaigns/templates/generate-template";
 
 type InitialData = {
@@ -79,24 +77,32 @@ export default function TemplateEditorForm({ initialData, templateId }: Props) {
     setIsSaving(true);
     setError(null);
     try {
-      if (isEditing && templateId) {
-        await updateTemplate(templateId, {
-          name,
-          description: description || undefined,
-          subject_default: subject,
-          content_html: contentHtml,
-          content_json: contentJson,
-        });
-      } else {
-        await createTemplate({
-          name,
-          description: description || undefined,
-          subject_default: subject,
-          content_html: contentHtml,
-          content_json: contentJson,
-        });
+      const payload = {
+        name,
+        description: description || undefined,
+        subject_default: subject,
+        content_html: contentHtml,
+        content_json: contentJson,
+      };
+      const url =
+        isEditing && templateId
+          ? `/api/campaigns/templates/${templateId}`
+          : `/api/campaigns/templates`;
+      const method = isEditing && templateId ? "PUT" : "POST";
+
+      const res = await fetch(url, {
+        method,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `Save failed (${res.status})`);
       }
+
       router.push("/campaigns/templates");
+      router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save template");
     } finally {
