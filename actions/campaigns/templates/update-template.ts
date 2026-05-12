@@ -12,7 +12,11 @@ export const updateTemplate = async (
   }>
 ) => {
   // Only update non-deleted templates
-  const existing = await prismadb.crm_campaign_templates.findFirst({ where: { id, deletedAt: null } });
+  const existing = await prismadb.crm_campaign_templates.findFirst({
+    where: { id, deletedAt: null },
+    select: { id: true },
+  });
   if (!existing) return null;
-  return prismadb.crm_campaign_templates.update({ where: { id }, data });
+  await prismadb.crm_campaign_templates.update({ where: { id }, data });
+  return { id };
 };

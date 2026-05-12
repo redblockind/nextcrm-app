@@ -8,9 +8,11 @@ export const createTemplate = async (data: {
   subject_default?: string;
   content_html: string;
   content_json: object;
-}) => {
+}): Promise<{ id: string }> => {
   const session = await getSession();
-  return prismadb.crm_campaign_templates.create({
+  const created = await prismadb.crm_campaign_templates.create({
     data: { ...data, created_by: session?.user?.id ?? null },
+    select: { id: true },
   });
+  return { id: created.id };
 };
