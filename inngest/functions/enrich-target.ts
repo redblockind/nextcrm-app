@@ -122,6 +122,12 @@ export const enrichTarget = inngest.createFunction(
 
       try {
         await sandbox.files.write("/home/user/agent.mjs", script);
+
+        // Install Anthropic SDK
+        await sandbox.commands.run("npm install @anthropic-ai/sdk", {
+          timeoutMs: 60000, // 60s for npm install
+        });
+
         let result: { exitCode: number; stdout: string; stderr: string };
         try {
           result = await sandbox.commands.run("node /home/user/agent.mjs", {
