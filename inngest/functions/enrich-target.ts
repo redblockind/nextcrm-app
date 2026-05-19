@@ -123,24 +123,23 @@ export const enrichTarget = inngest.createFunction(
       try {
         await sandbox.files.write("/home/user/agent.mjs", script);
 
-        // Install Anthropic SDK
-        await sandbox.commands.run("npm install @anthropic-ai/sdk", {
-          timeoutMs: 60000, // 60s for npm install
-        });
-
         let result: { exitCode: number; stdout: string; stderr: string };
         try {
-          result = await sandbox.commands.run("node /home/user/agent.mjs", {
-            timeoutMs: 0, // no per-request timeout; sandbox-level timeout handles the limit
-            envs: {
-              ANTHROPIC_API_KEY: anthropicKey,
-              COMPANY_NAME: target.company ?? "",
-              COMPANY_WEBSITE: target.company_website ?? "",
-              TARGET_EMAIL: target.email ?? "",
-              TARGET_NAME: [target.first_name, target.last_name].filter(Boolean).join(" "),
-              KNOWN_DOMAIN: knownDomain ?? "",
-            },
-          });
+          // Install SDK and run agent in single command so installation persists
+          result = await sandbox.commands.run(
+            "npm install @anthropic-ai/sdk && node /home/user/agent.mjs",
+            {
+              timeoutMs: 0, // no per-request timeout; sandbox-level timeout handles the limit
+              envs: {
+                ANTHROPIC_API_KEY: anthropicKey,
+                COMPANY_NAME: target.company ?? "",
+                COMPANY_WEBSITE: target.company_website ?? "",
+                TARGET_EMAIL: target.email ?? "",
+                TARGET_NAME: [target.first_name, target.last_name].filter(Boolean).join(" "),
+                KNOWN_DOMAIN: knownDomain ?? "",
+              },
+            }
+          );
         } catch (cmdErr: unknown) {
           const e = cmdErr as Record<string, unknown>;
           throw new Error(`Agent failed: ${e["stderr"] ?? e["stdout"] ?? String(cmdErr)}`);
