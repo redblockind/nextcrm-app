@@ -126,8 +126,9 @@ export const enrichTarget = inngest.createFunction(
         let result: { exitCode: number; stdout: string; stderr: string };
         try {
           // Install SDK and run agent in single command so installation persists
+          // Suppress npm output to stderr so agent JSON comes through on stdout
           result = await sandbox.commands.run(
-            "npm install @anthropic-ai/sdk && node /home/user/agent.mjs",
+            "npm install @anthropic-ai/sdk >/dev/null 2>&1 && node /home/user/agent.mjs",
             {
               timeoutMs: 0, // no per-request timeout; sandbox-level timeout handles the limit
               envs: {
