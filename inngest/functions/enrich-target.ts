@@ -31,6 +31,7 @@ export const enrichTarget = inngest.createFunction(
   {
     id: "enrich-target",
     name: "Enrich Target",
+    concurrency: { limit: 2 }, // Respect Anthropic's rate limits
     triggers: [{ event: "enrich/target.run" }],
     retries: 3,
   },
