@@ -340,6 +340,7 @@ model crm_campaign_steps {
   order        Int
   template_id  String    @db.Uuid
   subject      String
+  content_html String?   @db.Text
   delay_days   Int       @default(0)
   send_to      String    @default("all")  // "all" | "non_openers"
   scheduled_at DateTime?

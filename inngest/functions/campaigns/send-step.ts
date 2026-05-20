@@ -29,7 +29,10 @@ export const campaignSendStep = inngest.createFunction(
     if (!sendRecord) return { skipped: true, reason: "send record not found" };
     if (sendRecord.campaign.status === "paused") return { skipped: true, reason: "paused" };
 
-    const html = resolveMergeTags(sendRecord.step.template.content_html, sendRecord.target);
+    const html = resolveMergeTags(
+      sendRecord.step.content_html ?? sendRecord.step.template.content_html,
+      sendRecord.target
+    );
 
     const fromEmail = process.env.EMAIL_FROM;
     const fromAddress = sendRecord.campaign.from_name
