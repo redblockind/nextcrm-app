@@ -74,6 +74,7 @@ export function WizardShell({
         order: 0,
         template_id: merged.template_id!,
         subject: merged.subject!,
+        content_html: merged.content_html,
         delay_days: 0,
         send_to: "all" as const,
       };
