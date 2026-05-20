@@ -1,7 +1,13 @@
+/**
+ * Invoice PDF download route — fetches PDFs from Netlify Blobs.
+ *
+ * Previously redirected to a MinIO presigned URL. Now reads the PDF directly
+ * from Netlify Blobs via lib/storage.ts and returns it inline.
+ */
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth-server";
 import { prismadb } from "@/lib/prisma";
-import { getInvoicePdfPresignedUrl } from "@/lib/invoices/storage";
+import { storageGet } from "@/lib/storage";
 
 export async function GET(
   _request: NextRequest,
@@ -29,6 +35,15 @@ export async function GET(
     );
   }
 
-  const url = await getInvoicePdfPresignedUrl(invoice.pdfStorageKey);
-  return NextResponse.redirect(url);
+  const data = await storageGet(invoice.pdfStorageKey);
+  if (!data) {
+    return NextResponse.json({ error: "PDF file not found in storage" }, { status: 404 });
+  }
+
+  return new NextResponse(data, {
+    headers: {
+      "Content-Type": "application/pdf",
+      "Content-Disposition": `inline; filename="${invoiceId}.pdf"`,
+    },
+  });
 }

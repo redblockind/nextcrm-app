@@ -1,61 +1,65 @@
+/**
+ * File upload endpoint — stores files in Netlify Blobs via lib/storage.ts.
+ *
+ * Despite the route name "presigned-url" (kept for backward compatibility with
+ * existing client code), this endpoint no longer generates presigned S3 URLs.
+ * Instead, it accepts a multipart FormData POST with `file` and `folder` fields,
+ * stores the file server-side in Netlify Blobs, and returns { fileUrl, key }.
+ *
+ * Previously (MinIO era): clients called this route to get a presigned S3 URL,
+ * then uploaded directly to MinIO. Now: clients POST the file here directly.
+ *
+ * @see components/ui/minio-uploader.tsx — client-side upload component
+ * @see app/api/files/[key]/route.ts — serves stored files back to the client
+ */
 import path from "path";
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth-server";
-import { PutObjectCommand } from "@aws-sdk/client-s3";
-import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-import { minioClient, MINIO_BUCKET, MINIO_PUBLIC_URL } from "@/lib/minio";
+import { storageSet, storagePublicUrl } from "@/lib/storage";
 import { randomUUID } from "crypto";
 
 const ALLOWED_FOLDERS = ["avatars", "images", "documents", "uploads"] as const;
 type AllowedFolder = (typeof ALLOWED_FOLDERS)[number];
 
+const ALLOWED_CONTENT_TYPES = new Set([
+  "image/jpeg", "image/png", "image/gif", "image/webp",
+  "application/pdf", "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "text/plain",
+]);
+
 export async function POST(req: NextRequest) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const { filename: rawFilename, contentType, folder: rawFolder = "uploads" } = await req.json();
+  const formData = await req.formData();
+  const file = formData.get("file") as File | null;
+  const rawFolder = (formData.get("folder") as string) || "uploads";
 
-  // Sanitize: strip any path components to prevent path traversal
-  const filename = path.basename(rawFilename ?? "");
-  // Whitelist folder to only allow known upload destinations
+  if (!file) {
+    return NextResponse.json({ error: "file is required" }, { status: 400 });
+  }
+
+  if (!ALLOWED_CONTENT_TYPES.has(file.type)) {
+    return NextResponse.json({ error: "Content type not allowed" }, { status: 400 });
+  }
+
+  const filename = path.basename(file.name ?? "");
   const folder: AllowedFolder = ALLOWED_FOLDERS.includes(rawFolder as AllowedFolder)
     ? (rawFolder as AllowedFolder)
     : "uploads";
 
-  if (!filename || !contentType) {
-    return NextResponse.json({ error: "filename and contentType are required" }, { status: 400 });
-  }
-
-  const ALLOWED_CONTENT_TYPES = new Set([
-    "image/jpeg", "image/png", "image/gif", "image/webp",
-    "application/pdf", "application/msword",
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    "text/plain",
-  ]);
-  if (!ALLOWED_CONTENT_TYPES.has(contentType)) {
-    return NextResponse.json({ error: "Content type not allowed" }, { status: 400 });
-  }
-
-  // Fall back to "bin" if filename has no extension or extension is empty (e.g., ".")
   const ext = filename.includes(".") ? filename.split(".").pop()?.trim() || "bin" : "bin";
   const key = `${folder}/${randomUUID()}.${ext}`;
 
-  const command = new PutObjectCommand({
-    Bucket: MINIO_BUCKET,
-    Key: key,
-    ContentType: contentType,
-  });
-
-  // Presigned URL valid for 10 minutes
   try {
-    const presignedUrl = await getSignedUrl(minioClient, command, { expiresIn: 600 });
+    const arrayBuffer = await file.arrayBuffer();
+    await storageSet(key, arrayBuffer, { contentType: file.type });
 
-    // The public URL where the file will be accessible after upload
-    const fileUrl = `${MINIO_PUBLIC_URL}/${MINIO_BUCKET}/${key}`;
-
-    return NextResponse.json({ presignedUrl, fileUrl, key });
+    const fileUrl = storagePublicUrl(key);
+    return NextResponse.json({ fileUrl, key });
   } catch (err) {
-    console.error("Failed to generate presigned URL:", err);
-    return NextResponse.json({ error: "Failed to generate upload URL" }, { status: 500 });
+    console.error("Failed to upload file:", err);
+    return NextResponse.json({ error: "Failed to upload file" }, { status: 500 });
   }
 }

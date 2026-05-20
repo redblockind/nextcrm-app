@@ -7,6 +7,19 @@ import { getInvoicePdfStream } from "@/lib/invoices/storage";
 import { InvoiceEmail } from "@/emails/InvoiceEmail";
 import { render } from "@react-email/render";
 
+// Netlify Blobs returns a Web ReadableStream, not a Node.js stream.
+// This helper converts it to a Buffer for the Resend email attachment API.
+async function streamToBuffer(stream: ReadableStream): Promise<Buffer> {
+  const reader = stream.getReader();
+  const chunks: Uint8Array[] = [];
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (value) chunks.push(value);
+  }
+  return Buffer.concat(chunks);
+}
+
 interface SendInvoiceEmailInput {
   invoiceId: string;
   to: string;
@@ -43,12 +56,7 @@ export async function sendInvoiceEmail(input: SendInvoiceEmailInput) {
     throw new Error("Failed to retrieve invoice PDF from storage");
   }
 
-  // Convert stream to buffer
-  const chunks: Uint8Array[] = [];
-  for await (const chunk of pdfBody as AsyncIterable<Uint8Array>) {
-    chunks.push(chunk);
-  }
-  const pdfBuffer = Buffer.concat(chunks);
+  const pdfBuffer = await streamToBuffer(pdfBody);
 
   const resend = await resendHelper();
   const fromEmail = process.env.EMAIL_FROM ?? `invoices@${process.env.NEXT_PUBLIC_APP_DOMAIN ?? "nextcrm.app"}`;

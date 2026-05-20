@@ -1,21 +1,24 @@
+/**
+ * Generates a thumbnail for uploaded image documents.
+ *
+ * Reads the original file from Netlify Blobs, resizes it with sharp, and
+ * writes the thumbnail back to Netlify Blobs under the "thumbnails/" prefix.
+ * Previously read/wrote directly to MinIO via S3 SDK commands.
+ *
+ * @see lib/storage.ts — Netlify Blobs abstraction used for all file I/O
+ */
 import { inngest } from "@/inngest/client";
 import { prismadb } from "@/lib/prisma";
-import { GetObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
-import { minioClient, MINIO_BUCKET } from "@/lib/minio";
+import { storageGet, storageSet, storagePublicUrl } from "@/lib/storage";
 import sharp from "sharp";
 
 const THUMB_WIDTH = 200;
 const THUMB_HEIGHT = 200;
 
 async function fetchFileBuffer(key: string): Promise<Buffer> {
-  const response = await minioClient.send(
-    new GetObjectCommand({ Bucket: MINIO_BUCKET, Key: key })
-  );
-  const chunks: Uint8Array[] = [];
-  for await (const chunk of response.Body as AsyncIterable<Uint8Array>) {
-    chunks.push(chunk);
-  }
-  return Buffer.concat(chunks);
+  const data = await storageGet(key);
+  if (!data) throw new Error(`File not found: ${key}`);
+  return Buffer.from(data);
 }
 
 export const generateDocumentThumbnail = inngest.createFunction(
@@ -36,7 +39,6 @@ export const generateDocumentThumbnail = inngest.createFunction(
 
     const isImage = document.document_file_mimeType.startsWith("image/");
     if (!isImage) {
-      // For non-image files (PDF, DOCX), skip thumbnail for now.
       return { skipped: "non-image file" };
     }
 
@@ -47,17 +49,9 @@ export const generateDocumentThumbnail = inngest.createFunction(
       .toBuffer();
 
     const thumbnailKey = `thumbnails/${documentId}.png`;
+    await storageSet(thumbnailKey, thumbnail, { contentType: "image/png" });
 
-    await minioClient.send(
-      new PutObjectCommand({
-        Bucket: MINIO_BUCKET,
-        Key: thumbnailKey,
-        Body: thumbnail,
-        ContentType: "image/png",
-      })
-    );
-
-    const thumbnailUrl = `${process.env.NEXT_PUBLIC_MINIO_ENDPOINT}/${MINIO_BUCKET}/${thumbnailKey}`;
+    const thumbnailUrl = storagePublicUrl(thumbnailKey);
 
     await prismadb.documents.update({
       where: { id: documentId },

@@ -1,3 +1,14 @@
+/**
+ * @deprecated — This MinIO/S3 client is no longer used in the Netlify deployment.
+ *
+ * File storage has been migrated to Netlify Blobs (see lib/storage.ts).
+ * This file is retained only as a reference for the Docker self-hosting setup,
+ * which still uses MinIO as its object storage backend via docker-compose.yml.
+ *
+ * DO NOT import from this file for new features. Use lib/storage.ts instead,
+ * which provides: storageSet, storageGet, storageGetStream, storageDelete,
+ * and storagePublicUrl.
+ */
 import { S3Client } from "@aws-sdk/client-s3";
 
 let _client: S3Client | null = null;

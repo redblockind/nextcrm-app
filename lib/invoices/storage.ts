@@ -1,6 +1,13 @@
-import { PutObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3";
-import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-import { minioClient, MINIO_BUCKET } from "@/lib/minio";
+/**
+ * Invoice file storage — thin wrappers around the Netlify Blobs abstraction.
+ *
+ * Previously used MinIO S3 directly. Now delegates to lib/storage.ts which
+ * uses Netlify Blobs. Invoice PDFs are stored under the "invoices/" key prefix,
+ * and attachments under "invoices/{id}/attachments/".
+ *
+ * @see lib/storage.ts — the underlying Netlify Blobs storage layer
+ */
+import { storageSet, storageGet, storageGetStream, storagePublicUrl } from "@/lib/storage";
 
 function invoiceKey(invoiceId: string) {
   return `invoices/${invoiceId}.pdf`;
@@ -8,33 +15,16 @@ function invoiceKey(invoiceId: string) {
 
 export async function uploadInvoicePdf(invoiceId: string, pdf: Buffer): Promise<string> {
   const key = invoiceKey(invoiceId);
-  await minioClient.send(
-    new PutObjectCommand({
-      Bucket: MINIO_BUCKET,
-      Key: key,
-      Body: pdf,
-      ContentType: "application/pdf",
-    }),
-  );
+  await storageSet(key, pdf, { contentType: "application/pdf" });
   return key;
 }
 
 export async function getInvoicePdfStream(key: string) {
-  const res = await minioClient.send(
-    new GetObjectCommand({ Bucket: MINIO_BUCKET, Key: key }),
-  );
-  return res.Body;
+  return storageGetStream(key);
 }
 
-export async function getInvoicePdfPresignedUrl(
-  key: string,
-  expirySeconds = 300,
-): Promise<string> {
-  return getSignedUrl(
-    minioClient,
-    new GetObjectCommand({ Bucket: MINIO_BUCKET, Key: key }),
-    { expiresIn: expirySeconds },
-  );
+export async function getInvoicePdfUrl(key: string): Promise<string> {
+  return storagePublicUrl(key);
 }
 
 export async function uploadInvoiceAttachment(
@@ -44,13 +34,6 @@ export async function uploadInvoiceAttachment(
   mime: string,
 ): Promise<string> {
   const key = `invoices/${invoiceId}/attachments/${attachmentId}`;
-  await minioClient.send(
-    new PutObjectCommand({
-      Bucket: MINIO_BUCKET,
-      Key: key,
-      Body: buf,
-      ContentType: mime,
-    }),
-  );
+  await storageSet(key, buf, { contentType: mime });
   return key;
 }
