@@ -77,6 +77,15 @@ export const campaignScheduleSend = inngest.createFunction(
       });
     });
 
+    // Mark the campaign as "sending" before fanning out individual send events
+    // so that each send-step sees the correct status from the start.
+    await step.run("mark-sending", async () => {
+      return prismadb.crm_campaigns.update({
+        where: { id: campaignId },
+        data: { status: "sending" },
+      });
+    });
+
     // Fan-out send events
     await step.sendEvent(
       "fan-out-sends",
@@ -107,11 +116,6 @@ export const campaignScheduleSend = inngest.createFunction(
         }))
       );
     }
-
-    await prismadb.crm_campaigns.update({
-      where: { id: campaignId },
-      data: { status: "sending" },
-    });
 
     return { dispatched: sendRecords.length };
   }

@@ -1,13 +1,7 @@
 import { inngest } from "@/inngest/client";
 import { prismadb } from "@/lib/prisma";
-import { Resend } from "resend";
+import resendHelper from "@/lib/resend";
 import { resolveMergeTags } from "@/lib/campaigns/merge-tags";
-
-let _resend: Resend | null = null;
-function getResend(): Resend {
-  if (!_resend) _resend = new Resend(process.env.RESEND_API_KEY);
-  return _resend;
-}
 
 export const campaignSendStep = inngest.createFunction(
   {
@@ -37,12 +31,22 @@ export const campaignSendStep = inngest.createFunction(
 
     const html = resolveMergeTags(sendRecord.step.template.content_html, sendRecord.target);
 
+    const fromEmail = process.env.EMAIL_FROM;
     const fromAddress = sendRecord.campaign.from_name
-      ? `${sendRecord.campaign.from_name} <${process.env.RESEND_FROM_EMAIL}>`
-      : process.env.RESEND_FROM_EMAIL!;
+      ? `${sendRecord.campaign.from_name} <${fromEmail}>`
+      : fromEmail!;
 
     const result = await step.run("send-email", async () => {
-      return getResend().emails.send({
+      let resend;
+      try {
+        resend = await resendHelper();
+      } catch (error: any) {
+        return {
+          data: null,
+          error: { message: error?.message || "Resend API key not configured" },
+        };
+      }
+      return resend.emails.send({
         from: fromAddress,
         to: sendRecord.email,
         subject: resolveMergeTags(sendRecord.step.subject, sendRecord.target),
@@ -66,6 +70,47 @@ export const campaignSendStep = inngest.createFunction(
         data: {
           status: "sent",
           resend_message_id: result.data?.id,
+          sent_at: new Date(),
+        },
+      });
+    });
+
+    // After each individual send completes, check whether the entire campaign
+    // is finished so we can transition it out of the "sending" state.
+    await step.run("maybe-finalize-campaign", async () => {
+      // If any campaign step has zero send records, a follow-up hasn't been
+      // processed yet — don't finalize prematurely.
+      const allSteps = await prismadb.crm_campaign_steps.findMany({
+        where: { campaign_id: campaignId },
+        select: { id: true },
+      });
+      for (const s of allSteps) {
+        const count = await prismadb.crm_campaign_sends.count({
+          where: { step_id: s.id },
+        });
+        if (count === 0) return;
+      }
+
+      // All steps have sends — check if any are still queued (in-flight).
+      const queuedCount = await prismadb.crm_campaign_sends.count({
+        where: { campaign_id: campaignId, status: "queued" },
+      });
+      if (queuedCount > 0) return;
+
+      // Every send is in a terminal state. Determine the campaign outcome.
+      const [failedCount, totalCount] = await Promise.all([
+        prismadb.crm_campaign_sends.count({
+          where: { campaign_id: campaignId, status: "failed" },
+        }),
+        prismadb.crm_campaign_sends.count({
+          where: { campaign_id: campaignId },
+        }),
+      ]);
+
+      await prismadb.crm_campaigns.update({
+        where: { id: campaignId },
+        data: {
+          status: failedCount === totalCount ? "failed" : "sent",
           sent_at: new Date(),
         },
       });
