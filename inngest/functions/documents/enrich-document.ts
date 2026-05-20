@@ -1,3 +1,10 @@
+/**
+ * Enriches an uploaded document: extracts text, generates embeddings,
+ * produces an AI summary, and classifies the document type.
+ *
+ * File content is fetched from Netlify Blobs via lib/storage.ts.
+ * Previously fetched directly from MinIO using S3 GetObjectCommand.
+ */
 import { inngest } from "@/inngest/client";
 import { prismadb } from "@/lib/prisma";
 import {
@@ -5,8 +12,7 @@ import {
   toVectorLiteral,
   computeContentHash,
 } from "@/inngest/lib/embedding-utils";
-import { GetObjectCommand } from "@aws-sdk/client-s3";
-import { minioClient, MINIO_BUCKET } from "@/lib/minio";
+import { storageGet } from "@/lib/storage";
 import OpenAI from "openai";
 
 let openaiClient: OpenAI | null = null;
@@ -22,14 +28,9 @@ const CHUNK_OVERLAP = 50;
 const MAX_SINGLE_EMBED_CHARS = 8000 * 4; // ~8000 tokens
 
 async function fetchFileBuffer(key: string): Promise<Buffer> {
-  const response = await minioClient.send(
-    new GetObjectCommand({ Bucket: MINIO_BUCKET, Key: key })
-  );
-  const chunks: Uint8Array[] = [];
-  for await (const chunk of response.Body as AsyncIterable<Uint8Array>) {
-    chunks.push(chunk);
-  }
-  return Buffer.concat(chunks);
+  const data = await storageGet(key);
+  if (!data) throw new Error(`File not found: ${key}`);
+  return Buffer.from(data);
 }
 
 async function extractText(buffer: Buffer, mimeType: string): Promise<string | null> {

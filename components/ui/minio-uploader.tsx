@@ -1,3 +1,15 @@
+/**
+ * File upload dropzone component.
+ *
+ * Named "MinioUploader" for historical reasons — the component originally
+ * uploaded files to MinIO via a two-step presigned URL flow. It now sends files
+ * as FormData directly to /api/upload/presigned-url, which stores them in
+ * Netlify Blobs. The component name and file name are preserved to avoid
+ * breaking imports across the codebase.
+ *
+ * @see lib/storage.ts — the Netlify Blobs storage abstraction
+ * @see app/api/upload/presigned-url/route.ts — the server-side upload handler
+ */
 "use client";
 
 import { useCallback, useState } from "react";
@@ -29,33 +41,20 @@ export function MinioUploader({
       if (!file) return;
 
       setUploading(true);
-      setProgress("Requesting upload URL...");
+      setProgress("Uploading...");
 
       try {
-        // Step 1: Get presigned URL from our server
+        const formData = new FormData();
+        formData.append("file", file);
+        formData.append("folder", folder);
+
         const res = await fetch("/api/upload/presigned-url", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            filename: file.name,
-            contentType: file.type,
-            folder,
-          }),
+          body: formData,
         });
 
-        if (!res.ok) throw new Error("Failed to get upload URL");
-        const { presignedUrl, fileUrl, key } = await res.json();
-
-        setProgress("Uploading...");
-
-        // Step 2: PUT file directly to MinIO
-        const uploadRes = await fetch(presignedUrl, {
-          method: "PUT",
-          body: file,
-          headers: { "Content-Type": file.type },
-        });
-
-        if (!uploadRes.ok) throw new Error("Upload to storage failed");
+        if (!res.ok) throw new Error("Upload failed");
+        const { fileUrl, key } = await res.json();
 
         setProgress(null);
         onUploadComplete(fileUrl, key);

@@ -2,8 +2,8 @@
 import { getSession } from "@/lib/auth-server";
 
 import { prismadb } from "@/lib/prisma";
-import { DeleteObjectCommand } from "@aws-sdk/client-s3";
-import { minioClient, MINIO_BUCKET } from "@/lib/minio";
+// storageDelete removes the file from Netlify Blobs (previously deleted from MinIO/S3)
+import { storageDelete } from "@/lib/storage";
 
 export async function deleteDocument(documentId: string) {
   const session = await getSession();
@@ -20,11 +20,6 @@ export async function deleteDocument(documentId: string) {
   await prismadb.documents.delete({ where: { id: documentId } });
 
   if (document.key) {
-    await minioClient.send(
-      new DeleteObjectCommand({
-        Bucket: MINIO_BUCKET,
-        Key: document.key,
-      })
-    );
+    await storageDelete(document.key);
   }
 }

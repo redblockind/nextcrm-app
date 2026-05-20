@@ -1,3 +1,9 @@
+/**
+ * Preconfigured file upload dropzone — wraps MinioUploader with preset configs.
+ *
+ * Despite referencing "Minio" in the underlying component name, all uploads go
+ * through Netlify Blobs (see lib/storage.ts). The MinIO naming is historical.
+ */
 import { toast } from "sonner";
 import { MinioUploader } from "@/components/ui/minio-uploader";
 
