@@ -52,6 +52,13 @@ export const campaignSendNow = inngest.createFunction(
       });
     });
 
+    await step.run("mark-sending", async () => {
+      return prismadb.crm_campaigns.update({
+        where: { id: campaignId },
+        data: { status: "sending" },
+      });
+    });
+
     await step.sendEvent(
       "fan-out-sends-now",
       sendRecords.map((s) => ({
