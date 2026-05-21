@@ -15,7 +15,7 @@ const MERGE_TAG_MAP: Record<string, keyof MergeTagTarget> = {
 };
 
 export function resolveMergeTags(html: string, target: MergeTagTarget): string {
-  return html.replace(/\{\{(\w+)\}\}/g, (match, tag: string) => {
+  return html.replace(/\{\{\s*(\w+)\s*\}\}/g, (match, tag: string) => {
     const field = MERGE_TAG_MAP[tag];
     if (!field) return match; // unknown tag — leave as-is
     return target[field] ?? "";
