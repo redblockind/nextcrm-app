@@ -29,10 +29,21 @@ export const campaignSendStep = inngest.createFunction(
     if (!sendRecord) return { skipped: true, reason: "send record not found" };
     if (sendRecord.campaign.status === "paused") return { skipped: true, reason: "paused" };
 
-    const html = resolveMergeTags(
+    const unsubscribeUrl = `${process.env.NEXTAUTH_URL}/api/campaigns/unsubscribe?token=${sendRecord.unsubscribe_token}`;
+
+    const resolvedHtml = resolveMergeTags(
       sendRecord.step.content_html ?? sendRecord.step.template.content_html,
       sendRecord.target
     );
+
+    const unsubscribeFooter = `
+<div style="text-align:center;padding:20px 0 10px;margin-top:20px;border-top:1px solid #e0e0e0;font-size:12px;color:#888">
+  <a href="${unsubscribeUrl}" style="color:#888;text-decoration:underline">Unsubscribe</a> from this campaign.
+</div>`;
+
+    const html = resolvedHtml.includes("</body>")
+      ? resolvedHtml.replace("</body>", `${unsubscribeFooter}</body>`)
+      : resolvedHtml + unsubscribeFooter;
 
     const fromEmail = process.env.EMAIL_FROM;
     const fromAddress = sendRecord.campaign.from_name
@@ -56,7 +67,8 @@ export const campaignSendStep = inngest.createFunction(
         html,
         ...(sendRecord.campaign.reply_to ? { replyTo: sendRecord.campaign.reply_to } : {}),
         headers: {
-          "List-Unsubscribe": `<${process.env.NEXTAUTH_URL}/api/campaigns/unsubscribe?token=${sendRecord.unsubscribe_token}>`,
+          "List-Unsubscribe": `<${unsubscribeUrl}>`,
+          "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
         },
       });
     });
