@@ -1,7 +1,7 @@
 # NextCRM Email Marketing Workflow Analysis
 
 > **Purpose**: Reference guide for AI agents and humans working with the NextCRM email marketing system.
-> **Last validated**: 2026-05-22
+> **Last validated**: 2026-05-23
 > **Source**: Code analysis of the NextCRM codebase (two independent agent runs consolidated).
 
 ---
@@ -24,17 +24,30 @@
 ## 1. Data Model Overview
 
 ```
-CSV Import --> Targets --> Target Lists --> Campaigns --> Email Sends (via Resend)
-                |                                              |
-                |                                      Tracking: opens,
-                |                                      clicks, bounces,
-                |                                      unsubscribes
-                |
-         [Manual Convert]
-                |
-                v
-         Account + Contact --> Opportunities --> Contracts --> Invoices
-         (Sales Pipeline - only when needed)
+                          ┌─────────────────┐
+                          │  Data Ingestion  │
+                          └────────┬────────┘
+                 ┌─────────────────┼─────────────────┐
+                 │                 │                  │
+          CSV Import      Stripe Webhook       (Future sources)
+          (manual)        (automated via        
+                           Lambda + API)        
+                 │                 │                  │
+                 └─────────────────┼──────────────────┘
+                                   v
+                              Targets
+                                   │
+                           Target Lists ──── Campaigns ──── Email Sends (via Resend)
+                                                                  │
+                                                           Tracking: opens,
+                                                           clicks, bounces,
+                                                           unsubscribes
+                                   │
+                            [Manual Convert]
+                                   │
+                                   v
+                        Account + Contact --> Opportunities --> Contracts --> Invoices
+                        (Sales Pipeline - only when needed)
 ```
 
 **Core design principle**: NextCRM treats **Targets** as the email marketing universe and **Contacts** as the sales relationship universe. These are deliberately separate systems. Campaigns operate exclusively on targets. The CRM pipeline (Accounts > Contacts > Opportunities > Contracts > Invoices) operates on contacts. The bridge is a manual, one-at-a-time conversion action.
@@ -213,17 +226,72 @@ Best described as a **simple linear drip sequence with a single behavioral filte
 
 This workflow uses the minimum set of NextCRM features needed for email marketing, stays within the application's intended design, and avoids the complexity of the full CRM pipeline until sales tracking is actually needed.
 
-### Step 1: Import Buyers as Targets via CSV
+### Data Ingestion Methods
 
-Export contacts from the previous CRM as CSV. Import into NextCRM as targets. Supported CSV fields: `first_name`, `last_name`, `email`, `company`, `position`, phone numbers, social profiles.
+Two methods exist for getting buyer data into the Targets system:
+
+#### Method A: Manual CSV Import (Batch / Historical)
+
+Export contacts from the previous CRM as CSV. Import into NextCRM as targets via the web UI. Supported CSV fields: `first_name`, `last_name`, `email`, `company`, `position`, phone numbers, social profiles. Best for initial data migration and bulk historical imports.
+
+#### Method B: Automated Stripe Webhook Ingestion (Real-Time)
+
+An external Lambda function listens for Stripe webhook events (e.g., `checkout.session.completed`, `customer.created`) and POSTs customer data to the NextCRM ingestion API endpoint at `/api/crm/contacts/ingest`.
+
+**Current state (needs migration):** The ingestion endpoint currently creates **contacts** (`crm_Contacts`), which are invisible to the campaign system. This must be changed to create **targets** (`crm_Targets`) instead, since campaigns can only send to targets via target lists.
+
+**Required changes for automation:**
+1. Create a new ingestion endpoint (or modify existing) that writes to `crm_Targets` instead of `crm_Contacts`
+2. Auto-assign each new target to a standing target list (e.g., "Stripe Purchasers - Pending Post-Purchase Email")
+3. Store purchase metadata using available target fields (`tags`, `notes`, `description`) and any new schema fields added for Stripe data (e.g., `stripe_customer_id`)
+4. Handle deduplication by email (update existing target if found, create new if not)
+
+**Key file:** `app/api/crm/contacts/ingest/route.ts` — the current contact-based ingestion endpoint that the Lambda calls.
+
+### Automating Post-Purchase Email Delivery
+
+The campaign system is batch-oriented: campaigns send to a fixed set of targets at a specific time. There is no built-in "send to each new target as they arrive." To bridge the continuous flow of Stripe purchases to the batch campaign system, the recommended approach is a **Daily Batch Cron** using the existing Inngest infrastructure.
+
+#### Recommended: Daily Batch Cron via Inngest
+
+**How it works:**
+
+1. **Stripe purchase arrives** → Lambda calls ingestion API → target is created and added to the "Pending Post-Purchase" target list
+2. **Daily Inngest cron job** (e.g., every morning at 9am) runs and:
+   - Queries targets in the "Pending" list where `created_on` is 7+ days ago
+   - Filters out targets that have already received the post-purchase campaign (by checking `crm_campaign_sends`)
+   - If eligible targets exist: creates a dated batch target list (e.g., "Post-Purchase Batch 2026-05-23"), creates a campaign from the pre-built post-purchase template, triggers the send
+   - Moves processed targets from the "Pending" list to a "Sent" list for record-keeping
+3. **Campaign sends** proceed through the normal Inngest fan-out (send-step → Resend API → webhook tracking)
+
+**Why this approach:**
+- Uses 100% of existing campaign infrastructure (target lists, templates, Inngest, Resend, engagement tracking)
+- Creates proper campaign records visible in the dashboard with open/click/unsubscribe metrics
+- Batches efficiently — one campaign per day, not per purchase
+- The post-purchase email template can be managed via the CRM template editor UI
+- Multi-step follow-ups work naturally (e.g., a non-opener resend 3 days after the batch send)
+- The ~7 day delay is approximate (7-8 days depending on purchase time vs. cron time), which is acceptable since the delay is an estimate for delivery time
+
+**Tradeoffs:**
+- Not a precise 7-day delay per customer (could be 7-8 days depending on when the daily cron runs relative to the original purchase)
+- Creates one campaign record per batch day (manageable, but accumulates over time)
+- Requires a new Inngest cron function to orchestrate the batch logic
+
+#### Alternative Considered: Per-Purchase Inngest Delay
+
+Each ingestion fires an Inngest event → Inngest function sleeps 7 days via `step.sleep("7d")` → creates a one-target campaign and sends. This gives an exact 7-day delay per customer but creates one campaign per purchase, which clutters the dashboard and doesn't support multi-step follow-ups as cleanly. Not recommended unless precise per-customer timing is critical.
+
+#### Alternative Considered: Direct Resend Send (Bypass Campaign System)
+
+Send the email directly via the Resend API after a 7-day Inngest delay, without creating a campaign at all. This is the simplest implementation but loses all CRM tracking (no open/click/unsubscribe analytics, no campaign dashboard visibility, no follow-up capability). Not recommended since engagement tracking is important for iterating on post-purchase email effectiveness.
 
 ### Step 2: Organize into Target Lists
 
-Create target lists by product line or buyer category (e.g., "Widget A Buyers", "Service B Subscribers", "Newsletter Opt-ins"). Assign targets to appropriate lists. A single target can belong to multiple lists.
+Create target lists by product line or buyer category (e.g., "Widget A Buyers", "Service B Subscribers", "Newsletter Opt-ins"). Assign targets to appropriate lists. A single target can belong to multiple lists. For automated ingestion, the target list assignment happens automatically at ingestion time.
 
 ### Step 3: Create Email Templates
 
-Use the campaign template editor. Use merge tags (`{{first_name}}`, `{{company}}`, etc.) for personalization. Templates are reusable across campaigns.
+Use the campaign template editor. Use merge tags (`{{first_name}}`, `{{company}}`, etc.) for personalization. Templates are reusable across campaigns. For the post-purchase flow, create a dedicated template with the post-purchase materials content.
 
 ### Step 4: Build Multi-Step Campaigns
 
@@ -231,15 +299,15 @@ For each post-purchase flow, create a campaign with:
 
 | Step | Order | Delay | Example |
 |---|---|---|---|
-| Initial email | 0 | 0 days | Thank you / getting started guide |
+| Initial email | 0 | 0 days | Post-purchase materials / getting started guide |
 | Follow-up 1 | 1 | 3-7 days | Check-in, set `send_to` to `"all"` or `"non_openers"` |
 | Follow-up N | N | As needed | Additional touches |
 
-Assign relevant target list(s). Send immediately or schedule.
+For automated flows, the daily batch cron handles campaign creation and triggering. For manual campaigns, assign relevant target list(s) and send immediately or schedule.
 
 ### Step 5: Monitor Engagement
 
-Campaign detail page shows: sent count, delivered count, open rate, click rate, bounce rate. Individual recipient status visible in recipients table. Reports > Campaigns provides aggregate analytics.
+Campaign detail page shows: sent count, delivered count, open rate, click rate, bounce rate. Individual recipient status visible in recipients table. Reports > Campaigns provides aggregate analytics. Automated batch campaigns appear in the campaign list with their batch date for easy identification.
 
 ### Step 6: Convert High-Value Targets to Contacts (Only When Needed)
 
@@ -252,8 +320,8 @@ If a target becomes a genuine sales prospect (reply, demo request, large order),
 | Limitation | Impact | Compliance risk |
 |---|---|---|
 | No global unsubscribe list | Unsubscribe is per-campaign; target can still receive other campaigns | **CAN-SPAM / GDPR** |
-| No automated target list management | New buyers must be manually CSV-imported and assigned to lists | Operational overhead |
-| No event-triggered campaigns | All campaigns are one-shot (send now or schedule); no purchase/signup triggers | Feature gap |
+| No automated target list management | New buyers must be manually CSV-imported and assigned to lists unless using the Stripe webhook automation (see Section 6) | Operational overhead |
+| No event-triggered campaigns | All campaigns are one-shot (send now or schedule); automated post-purchase flow uses daily batch cron as workaround (see Section 6) | Feature gap |
 | No A/B testing | No subject line or content variant testing | Feature gap |
 | No unified send history after conversion | Campaign sends stay on target record; no cross-system email history | Data fragmentation |
 | No "openers only" follow-up filter | Cannot target only people who opened | Feature gap |
@@ -308,13 +376,23 @@ Maintain a "Do Not Email" target list and manually exclude it from all campaigns
 
 | Component | Path |
 |---|---|
+| Stripe customer ingestion API (currently contacts, needs migration to targets) | `app/api/crm/contacts/ingest/route.ts` |
 | CSV target import action | `actions/crm/targets/import-targets.ts` |
 | CLI contact importer | `scripts/import/crm-contact-importer.ts` |
+| Target creation action | `actions/crm/targets/create-target.ts` |
+| Target list creation action | `actions/crm/target-lists/create-target-list.ts` |
+| Add targets to list action | `actions/crm/target-lists/add-targets-to-list.ts` |
 | Target-to-contact conversion | `actions/crm/targets/convert-target.ts` |
+| Campaign creation action | `actions/campaigns/create-campaign.ts` |
 | Campaign creation wizard (Schedule/Follow-ups) | `app/[locale]/(routes)/campaigns/new/components/Step4Schedule.tsx` |
 | Campaign detail / analytics | `app/[locale]/(routes)/campaigns/[campaignId]/components/CampaignDetail.tsx` |
+| Inngest campaign scheduling | `inngest/functions/campaigns/schedule-send.ts` |
+| Inngest campaign immediate send | `inngest/functions/campaigns/send-now.ts` |
+| Inngest campaign send step | `inngest/functions/campaigns/send-step.ts` |
 | Follow-up processing (Inngest) | `inngest/functions/campaigns/process-follow-up.ts` |
+| Inngest client config | `inngest/client.ts` |
 | Campaign steps schema | `prisma/schema.prisma` (lines 337-356, `crm_campaign_steps` table) |
 | Campaign sends schema | `prisma/schema.prisma` (`crm_campaign_sends` table) |
+| Targets schema | `prisma/schema.prisma` (lines 1228-1283, `crm_Targets` table) |
 | MCP campaign tools | `lib/mcp/tools/campaigns.ts` |
-| Resend webhook handler | Check Inngest functions for webhook event handlers |
+| Resend webhook handler | `app/api/campaigns/webhooks/resend/route.ts` |
