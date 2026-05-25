@@ -258,6 +258,76 @@ export async function BasicView({ data }: TargetBasicViewProps) {
         </Card>
       </div>
 
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle>Custom Fields</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="-mx-2 flex items-start space-x-4 rounded-md p-2 transition-all hover:bg-accent hover:text-accent-foreground">
+              <div className="space-y-1">
+                <p className="text-sm font-medium leading-none">Stripe Customer ID</p>
+                <p className="text-sm text-muted-foreground">{data.stripe_customer_id || "N/A"}</p>
+              </div>
+            </div>
+            <div className="-mx-2 flex items-start space-x-4 rounded-md p-2 transition-all hover:bg-accent hover:text-accent-foreground">
+              <div className="space-y-1">
+                <p className="text-sm font-medium leading-none">Contact Origin</p>
+                <p className="text-sm text-muted-foreground">{data.contact_origin || "N/A"}</p>
+              </div>
+            </div>
+            <div className="-mx-2 flex items-start space-x-4 rounded-md p-2 transition-all hover:bg-accent hover:text-accent-foreground">
+              <div className="space-y-1">
+                <p className="text-sm font-medium leading-none">Is B2B</p>
+                <p className="text-sm text-muted-foreground">{data.is_b2b !== null ? (data.is_b2b ? "Yes" : "No") : "N/A"}</p>
+              </div>
+            </div>
+            <div className="-mx-2 flex items-start space-x-4 rounded-md p-2 transition-all hover:bg-accent hover:text-accent-foreground">
+              <div className="space-y-1">
+                <p className="text-sm font-medium leading-none">B2B Discount %</p>
+                <p className="text-sm text-muted-foreground">{data.b2b_discount_percent || "N/A"}</p>
+              </div>
+            </div>
+            <div className="-mx-2 flex items-start space-x-4 rounded-md p-2 transition-all hover:bg-accent hover:text-accent-foreground">
+              <div className="space-y-1">
+                <p className="text-sm font-medium leading-none">First Order Date</p>
+                <p className="text-sm text-muted-foreground">{data.first_order_date || "N/A"}</p>
+              </div>
+            </div>
+            <div className="-mx-2 flex items-start space-x-4 rounded-md p-2 transition-all hover:bg-accent hover:text-accent-foreground">
+              <div className="space-y-1">
+                <p className="text-sm font-medium leading-none">Last Order Date</p>
+                <p className="text-sm text-muted-foreground">{data.last_order_date || "N/A"}</p>
+              </div>
+            </div>
+            <div className="-mx-2 flex items-start space-x-4 rounded-md p-2 transition-all hover:bg-accent hover:text-accent-foreground">
+              <div className="space-y-1">
+                <p className="text-sm font-medium leading-none">Last Order ID</p>
+                <p className="text-sm text-muted-foreground">{data.last_order_id || "N/A"}</p>
+              </div>
+            </div>
+            <div className="-mx-2 flex items-start space-x-4 rounded-md p-2 transition-all hover:bg-accent hover:text-accent-foreground">
+              <div className="space-y-1">
+                <p className="text-sm font-medium leading-none">Cumulative Order Count</p>
+                <p className="text-sm text-muted-foreground">{data.cumulative_order_count || "N/A"}</p>
+              </div>
+            </div>
+            <div className="-mx-2 flex items-start space-x-4 rounded-md p-2 transition-all hover:bg-accent hover:text-accent-foreground">
+              <div className="space-y-1">
+                <p className="text-sm font-medium leading-none">Opt In Time</p>
+                <p className="text-sm text-muted-foreground">{data.opt_in_time || "N/A"}</p>
+              </div>
+            </div>
+            <div className="-mx-2 flex items-start space-x-4 rounded-md p-2 transition-all hover:bg-accent hover:text-accent-foreground">
+              <div className="space-y-1">
+                <p className="text-sm font-medium leading-none">Is Temporary</p>
+                <p className="text-sm text-muted-foreground">{data.is_temporary !== null ? (data.is_temporary ? "Yes" : "No") : "N/A"}</p>
+              </div>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
       {data.notes && data.notes.length > 0 && (
         <Card>
           <CardHeader className="pb-3">
