@@ -1,7 +1,7 @@
 # NextCRM Email Marketing Workflow Analysis
 
 > **Purpose**: Reference guide for AI agents and humans working with the NextCRM email marketing system.
-> **Last validated**: 2026-05-23
+> **Last validated**: 2026-05-24
 > **Source**: Code analysis of the NextCRM codebase (two independent agent runs consolidated).
 
 ---
@@ -9,11 +9,15 @@
 ## Table of Contents
 
 - [1. Data Model Overview](#1-data-model-overview)
+- [1.1 Target Custom Fields](#11-target-custom-fields)
+- [1.2 Data Migration Strategy](#12-data-migration-strategy)
 - [2. Assumption Validation](#2-assumption-validation)
 - [3. Campaign System Architecture](#3-campaign-system-architecture)
 - [4. Multi-Step Campaign Configuration](#4-multi-step-campaign-configuration)
 - [5. Engagement Tracking and Action-Based Follow-Ups](#5-engagement-tracking-and-action-based-follow-ups)
 - [6. Recommended Email Marketing Workflow](#6-recommended-email-marketing-workflow)
+- [6.1 Double-Send Prevention](#61-double-send-prevention)
+- [6.2 Testing the Automation](#62-testing-the-automation)
 - [7. Known Limitations](#7-known-limitations)
 - [8. Workarounds for Missing Features](#8-workarounds-for-missing-features)
 - [9. Features Safe to Ignore for Email Marketing](#9-features-safe-to-ignore-for-email-marketing)
@@ -51,6 +55,38 @@
 ```
 
 **Core design principle**: NextCRM treats **Targets** as the email marketing universe and **Contacts** as the sales relationship universe. These are deliberately separate systems. Campaigns operate exclusively on targets. The CRM pipeline (Accounts > Contacts > Opportunities > Contracts > Invoices) operates on contacts. The bridge is a manual, one-at-a-time conversion action.
+
+### 1.1 Target Custom Fields
+
+The following optional fields are added to `crm_Targets` to support the automated post-purchase workflow. All are nullable — the Prisma migration is `ALTER TABLE ADD COLUMN ... DEFAULT NULL` with zero risk to existing data. Existing code (campaigns, enrichment, UI, list management) ignores columns it doesn't reference, so this is a safe additive change.
+
+| Field | Type | Purpose |
+|---|---|---|
+| `stripe_customer_id` | `String?` | Dedup key for Stripe webhook target ingestion. Prevents duplicate targets for returning customers. |
+| `first_order_date` | `String?` | Records when the customer first ordered in Stripe. Historical reference only — **not** used for automation timing (see design decision below). |
+| `last_order_date` | `String?` | Identifies repeat vs. one-time buyers for segmentation. |
+| `last_order_id` | `String?` | Traceability back to Stripe for debugging or customer service. |
+| `cumulative_order_count` | `String?` | First-time vs. repeat buyer segmentation. |
+| `contact_origin` | `String?` | How the target was created: `"stripe_webhook"`, `"csv_import"`, `"manual"`. |
+| `opt_in_time` | `String?` | Compliance — records when the customer opted in to communications. |
+| `is_b2b` | `Boolean?` | B2B vs. B2C segmentation for different email content. |
+| `b2b_discount_percent` | `String?` | Discount data carried forward from old CRM. |
+| `is_temporary` | `Boolean?` | Flags test or temporary records. Least critical field; kept for parity with contacts. |
+
+**Design decision — `created_on` vs. `first_order_date` for the 7-day delay**: The daily cron uses the native `created_on` field (when the target record was created in NextCRM) rather than `first_order_date` (the Stripe purchase date). Rationale: `created_on` is a native NextCRM field set automatically at record creation and is the appropriate timestamp for CRM-side automation logic. `first_order_date` is retained purely as a historical reference — it records when the customer actually placed their first Stripe order, which may differ from when they were ingested into NextCRM. Using a Stripe-sourced field to drive NextCRM automation would couple the CRM's internal logic to an external system's data.
+
+### 1.2 Data Migration Strategy
+
+Initial data state: contacts table has the full customer list (CSV import from old CRM + 2 new Stripe customers). Targets table has the same CSV import but without custom field values and without the 2 Stripe customers.
+
+**Approach: "Add fields → sync from contacts → delete contacts"**
+
+1. **Add custom fields** to `crm_Targets` schema (Section 1.1). Run migration.
+2. **Sync script** (one-time): For each non-deleted contact, find matching target by email (case-insensitive). If match: update target with custom field values. If no match (the 2 Stripe customers): create new target, add to relevant target list. Map contact `city` → target `city`, contact `country` → target `country`. Drop `state` (no equivalent target field, not needed for email marketing).
+3. **Verify**: Count comparison (non-deleted contacts = non-deleted targets). Spot-check custom field values.
+4. **Delete all contacts**: Clears the contacts table for its intended CRM sales pipeline purpose.
+
+**Why not "delete everything and re-import"**: Deleting targets would destroy existing target list memberships. The sync approach preserves all list associations and is more surgical.
 
 ---
 
@@ -284,6 +320,27 @@ Each ingestion fires an Inngest event → Inngest function sleeps 7 days via `st
 #### Alternative Considered: Direct Resend Send (Bypass Campaign System)
 
 Send the email directly via the Resend API after a 7-day Inngest delay, without creating a campaign at all. This is the simplest implementation but loses all CRM tracking (no open/click/unsubscribe analytics, no campaign dashboard visibility, no follow-up capability). Not recommended since engagement tracking is important for iterating on post-purchase email effectiveness.
+
+### 6.1 Double-Send Prevention
+
+The daily batch cron uses two layers of protection against duplicate sends:
+
+**Layer 1 — List-based gating (primary)**: The cron queries the "Pending Post-Purchase" target list. After processing, targets are moved from "Pending" to "Sent Post-Purchase". On the next run, processed targets are no longer in the query set.
+
+**Layer 2 — Send-record check (safety net)**: The cron also checks `crm_campaign_sends` for existing send records matching the post-purchase campaign template. This catches edge cases: a target remaining in Pending after a partial failure (campaign sent but list-move didn't complete), or a target accidentally re-added to Pending.
+
+The cron's effective query: *"Targets in the Pending list where `created_on` is 7+ days ago AND who have no `crm_campaign_sends` records for a post-purchase campaign."*
+
+### 6.2 Testing the Automation
+
+The Pending Post-Purchase target list enables simple manual testing without a test harness:
+
+1. Create a target (e.g., "John Doe") with an email address you control.
+2. Add the target to the "Pending Post-Purchase" target list.
+3. Set `created_on` to a date 7+ days in the past so the cron immediately considers the target eligible.
+4. Manually trigger the Inngest cron function via the Inngest dashboard (or local dev server) — no need to wait for the scheduled run.
+5. Verify: target appears in a dated batch list (e.g., "Post-Purchase Batch 2026-05-23"), a campaign is created and sent, and the email arrives.
+6. Confirm the target was moved from "Pending" to the "Sent Post-Purchase" list.
 
 ### Step 2: Organize into Target Lists
 
