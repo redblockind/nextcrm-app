@@ -1,8 +1,8 @@
 # NextCRM Email Marketing Workflow Analysis
 
 > **Purpose**: Reference guide for AI agents and humans working with the NextCRM email marketing system.
-> **Last validated**: 2026-05-24
-> **Source**: Code analysis of the NextCRM codebase (two independent agent runs consolidated).
+> **Last validated**: 2026-05-27
+> **Source**: Code analysis of the NextCRM codebase (multiple agent runs consolidated).
 
 ---
 
@@ -22,6 +22,9 @@
 - [8. Workarounds for Missing Features](#8-workarounds-for-missing-features)
 - [9. Features Safe to Ignore for Email Marketing](#9-features-safe-to-ignore-for-email-marketing)
 - [10. Key File References](#10-key-file-references)
+- [11. Implementation Log](#11-implementation-log)
+- [11.1 Fix: 405 Error on POST /api/crm/targets/ingest](#111-fix-405-error-on-post-apicrmtargetsingest)
+- [11.2 Enhancement: Target Detail View — Custom Fields Card](#112-enhancement-target-detail-view--custom-fields-card)
 
 ---
 
@@ -453,3 +456,39 @@ Maintain a "Do Not Email" target list and manually exclude it from all campaigns
 | Targets schema | `prisma/schema.prisma` (lines 1228-1283, `crm_Targets` table) |
 | MCP campaign tools | `lib/mcp/tools/campaigns.ts` |
 | Resend webhook handler | `app/api/campaigns/webhooks/resend/route.ts` |
+| Target detail view (BasicView) | `app/[locale]/(routes)/campaigns/targets/[targetId]/components/BasicView.tsx` |
+| Update target action | `actions/crm/targets/update-target.ts` |
+| Next.js config (redirects) | `next.config.js` |
+| Stripe fields migration (targets) | `prisma/migrations/20260525000000_add_stripe_fields_to_targets/migration.sql` |
+
+---
+
+## 11. Implementation Log
+
+### 11.1 Fix: 405 Error on POST /api/crm/targets/ingest
+
+**Date**: 2026-05-25
+**Symptom**: The Stripe ingestion Lambda received a 405 (Method Not Allowed) when POSTing to `/api/crm/targets/ingest`.
+
+Two separate root causes were discovered during investigation:
+
+**Root cause 1 — Overly broad redirect intercepting API routes.** The `next.config.js` redirect rules used `/:locale/crm/targets/:path*` as their source pattern. Because `:locale` is a wildcard matching any single path segment, it captured `api` when the Lambda sent `POST /api/crm/targets/ingest`. This caused Next.js to issue a 308 redirect to `/api/campaigns/targets/ingest` — a path with no `ingest` route — producing the 405 seen in CloudWatch. The fix constrains the `:locale` parameter to only match actual locale values (`en|cz|de|uk`), so API routes pass through to the correct handler. The same fix was applied to the target-lists redirect to prevent a similar issue there.
+
+**Root cause 2 — Missing database migration for `crm_Targets` table.** The previous agent run added Stripe/post-purchase automation fields (`stripe_customer_id`, `contact_origin`, `is_b2b`, `first_order_date`, `last_order_date`, `last_order_id`, `cumulative_order_count`, `opt_in_time`, `b2b_discount_percent`, `is_temporary`) to the Prisma schema for both `crm_Contacts` and `crm_Targets`, but only created a database migration for `crm_Contacts`. Without the migration, the `crm_Targets` database table lacked these columns, which would have caused runtime errors (500s) once the redirect issue was resolved and the route was reachable. A new migration (`20260525000000_add_stripe_fields_to_targets`) was added to create the missing columns and indexes on `crm_Targets`.
+
+**Files changed:**
+- `next.config.js` — Constrained redirect `:locale` parameter from wildcard to `(en|cz|de|uk)` for both `/crm/targets/` and `/crm/target-lists/` redirects
+- `prisma/migrations/20260525000000_add_stripe_fields_to_targets/migration.sql` — New migration adding 10 Stripe/automation columns and 3 indexes to the `crm_Targets` table
+
+### 11.2 Enhancement: Target Detail View — Custom Fields Card
+
+**Date**: 2026-05-25
+**Context**: The previous fix added database columns and a migration for the new Stripe/automation fields on `crm_Targets`, but the target detail UI did not render any of those fields. When viewing a target, users would only see the original fields (name, company, contact info, social networks) with no visibility into the Stripe-synced data.
+
+**Changes**: A new "Custom Fields" card was added to the target detail view (`BasicView.tsx`) that displays all 10 Stripe/automation fields in a two-column grid: Stripe Customer ID, Contact Origin, Is B2B, B2B Discount %, First Order Date, Last Order Date, Last Order ID, Cumulative Order Count, Opt In Time, and Is Temporary. The card follows the same layout and styling as the equivalent section already present on the Contact detail view. The card appears between the social networks section and the notes section.
+
+The `updateTarget` server action was also updated to accept all 10 new fields in its type definition, so these fields can be persisted through future form submissions or programmatic updates. Previously the action would silently ignore any of these fields passed to it because they were not in the TypeScript type.
+
+**Files changed:**
+- `app/[locale]/(routes)/campaigns/targets/[targetId]/components/BasicView.tsx` — Added "Custom Fields" card displaying all 10 Stripe/automation fields
+- `actions/crm/targets/update-target.ts` — Added the 10 new fields to the action's TypeScript type definition
