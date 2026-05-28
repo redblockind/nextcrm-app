@@ -2,9 +2,9 @@ import { inngest } from "@/inngest/client";
 import { prismadb } from "@/lib/prisma";
 import { randomUUID } from "crypto";
 
-const PENDING_LIST_NAME = "Pending Post-Purchase";
-const SENT_LIST_NAME = "Sent Post-Purchase";
-const POST_PURCHASE_TAG = "post-purchase-auto";
+const CAMPAIGN_ROOT = "post-purchase";
+const PENDING_LIST_NAME = `pending-${CAMPAIGN_ROOT}`;
+const SENT_LIST_NAME = `sent-${CAMPAIGN_ROOT}`;
 const DELAY_DAYS = 7;
 
 export const postPurchaseBatchCron = inngest.createFunction(
@@ -69,7 +69,7 @@ export const postPurchaseBatchCron = inngest.createFunction(
         const alreadySent = await prismadb.crm_campaign_sends.findMany({
           where: {
             target_id: { in: eligibleTargets.map((t: { id: string }) => t.id) },
-            campaign: { tags: { has: POST_PURCHASE_TAG } },
+            campaign: { tags: { has: CAMPAIGN_ROOT } },
           },
           select: { target_id: true },
         });
@@ -86,7 +86,7 @@ export const postPurchaseBatchCron = inngest.createFunction(
 
     const template = await step.run("find-template", async () => {
       return prismadb.crm_campaign_templates.findFirst({
-        where: { tags: { has: POST_PURCHASE_TAG } },
+        where: { tags: { has: CAMPAIGN_ROOT } },
         select: { id: true, subject_default: true, content_html: true },
       });
     });
@@ -94,15 +94,15 @@ export const postPurchaseBatchCron = inngest.createFunction(
     if (!template) {
       return {
         dispatched: 0,
-        reason: `no template tagged "${POST_PURCHASE_TAG}" found — create one first`,
+        reason: `no template tagged "${CAMPAIGN_ROOT}" found — create one first`,
       };
     }
 
     const batchList = await step.run("create-batch-list", async () => {
       const list = await prismadb.crm_TargetLists.create({
         data: {
-          name: `Post-Purchase Batch ${today}`,
-          description: `Auto-generated batch for ${newTargets.length} targets on ${today}`,
+          name: `${CAMPAIGN_ROOT}-batch-${today}`,
+          description: `Auto-generated ${CAMPAIGN_ROOT} batch for ${newTargets.length} targets on ${today}`,
         },
         select: { id: true },
       });
@@ -120,11 +120,11 @@ export const postPurchaseBatchCron = inngest.createFunction(
       return prismadb.crm_campaigns.create({
         data: {
           v: 0,
-          name: `Post-Purchase Email — ${today}`,
-          description: `Automated post-purchase email for ${newTargets.length} targets`,
+          name: `${CAMPAIGN_ROOT} — ${today}`,
+          description: `Automated ${CAMPAIGN_ROOT} email for ${newTargets.length} targets`,
           status: "scheduled",
           template_id: template.id,
-          tags: [POST_PURCHASE_TAG],
+          tags: [CAMPAIGN_ROOT],
           target_lists: {
             create: { target_list_id: batchList.id },
           },
