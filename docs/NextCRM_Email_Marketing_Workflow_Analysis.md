@@ -1,12 +1,14 @@
 # NextCRM Email Marketing Workflow Analysis
 
 > **Purpose**: Reference guide for AI agents and humans working with the NextCRM email marketing system.
-> **Last validated**: 2026-05-27
+> **Last validated**: 2026-05-28
 > **Source**: Code analysis of the NextCRM codebase (multiple agent runs consolidated).
 
 ---
 
 ## Table of Contents
+
+### Part I — Analysis
 
 - [1. Data Model Overview](#1-data-model-overview)
 - [1.1 Target Custom Fields](#11-target-custom-fields)
@@ -15,16 +17,36 @@
 - [3. Campaign System Architecture](#3-campaign-system-architecture)
 - [4. Multi-Step Campaign Configuration](#4-multi-step-campaign-configuration)
 - [5. Engagement Tracking and Action-Based Follow-Ups](#5-engagement-tracking-and-action-based-follow-ups)
-- [6. Recommended Email Marketing Workflow](#6-recommended-email-marketing-workflow)
-- [6.1 Double-Send Prevention](#61-double-send-prevention)
-- [6.2 Testing the Automation](#62-testing-the-automation)
+- [6. Multi-Source Ingestion Design](#6-multi-source-ingestion-design)
+- [6.1 The target_list Field](#61-the-target_list-field)
+- [6.2 Root-Name-Driven Naming Convention](#62-root-name-driven-naming-convention)
+- [6.3 Unconditional Target Capture](#63-unconditional-target-capture)
+- [6.4 Ingestion Sources](#64-ingestion-sources)
 - [7. Known Limitations](#7-known-limitations)
 - [8. Workarounds for Missing Features](#8-workarounds-for-missing-features)
 - [9. Features Safe to Ignore for Email Marketing](#9-features-safe-to-ignore-for-email-marketing)
-- [10. Key File References](#10-key-file-references)
-- [11. Implementation Log](#11-implementation-log)
-- [11.1 Fix: 405 Error on POST /api/crm/targets/ingest](#111-fix-405-error-on-post-apicrmtargetsingest)
-- [11.2 Enhancement: Target Detail View — Custom Fields Card](#112-enhancement-target-detail-view--custom-fields-card)
+
+### Part II — Implementation
+
+- [10. Recommended Email Marketing Workflow](#10-recommended-email-marketing-workflow)
+- [10.1 Data Ingestion Methods](#101-data-ingestion-methods)
+- [10.2 Automating Post-Purchase Email Delivery](#102-automating-post-purchase-email-delivery)
+- [10.3 Double-Send Prevention](#103-double-send-prevention)
+- [10.4 Testing the Automation](#104-testing-the-automation)
+- [10.5 Organize into Target Lists](#105-organize-into-target-lists)
+- [10.6 Create Email Templates](#106-create-email-templates)
+- [10.7 Build Multi-Step Campaigns](#107-build-multi-step-campaigns)
+- [10.8 Monitor Engagement](#108-monitor-engagement)
+- [10.9 Convert High-Value Targets to Contacts (Only When Needed)](#109-convert-high-value-targets-to-contacts-only-when-needed)
+- [11. Key File References](#11-key-file-references)
+- [12. Implementation Log](#12-implementation-log)
+- [12.1 Fix: 405 Error on POST /api/crm/targets/ingest](#121-fix-405-error-on-post-apicrmtargetsingest)
+- [12.2 Enhancement: Target Detail View — Custom Fields Card](#122-enhancement-target-detail-view--custom-fields-card)
+- [12.3 Multi-Source Ingestion — target_list Field and Naming Convention](#123-multi-source-ingestion--target_list-field-and-naming-convention)
+
+---
+
+# Part I — Analysis
 
 ---
 
@@ -34,13 +56,21 @@
                           ┌─────────────────┐
                           │  Data Ingestion  │
                           └────────┬────────┘
-                 ┌─────────────────┼─────────────────┐
-                 │                 │                  │
-          CSV Import      Stripe Webhook       (Future sources)
-          (manual)        (automated via        
-                           Lambda + API)        
-                 │                 │                  │
-                 └─────────────────┼──────────────────┘
+          ┌────────────────────────┼────────────────────────┐
+          │                        │                         │
+   CSV Import              Stripe Webhook             Netlify Forms
+   (manual)                (automated via              (automated via
+                            Lambda + API)               form submission
+                                                        + webhook/API)
+          │                        │                         │
+          │              ┌─────────┴──────────┐              │
+          │              │ target_list param?  │              │
+          │              └────┬──────────┬────┘              │
+          │                   │          │                    │
+          │              yes: assign   no: capture           │
+          │              to pending    only (no list)        │
+          │              list                                │
+          └────────────────────────┼────────────────────────┘
                                    v
                               Targets
                                    │
@@ -59,6 +89,8 @@
 
 **Core design principle**: NextCRM treats **Targets** as the email marketing universe and **Contacts** as the sales relationship universe. These are deliberately separate systems. Campaigns operate exclusively on targets. The CRM pipeline (Accounts > Contacts > Opportunities > Contracts > Invoices) operates on contacts. The bridge is a manual, one-at-a-time conversion action.
 
+**Multi-source ingestion principle**: The ingestion API at `/api/crm/targets/ingest` is source-agnostic. Any external system (Stripe Lambda, Netlify Forms webhook, future integrations) can POST target data to the same endpoint. The optional `target_list` parameter controls whether the target is assigned to a pending list for automated campaign processing, or simply captured into the target database without list assignment. This means every incoming target is always persisted — list routing is an optional layer on top of unconditional capture.
+
 ### 1.1 Target Custom Fields
 
 The following optional fields are added to `crm_Targets` to support the automated post-purchase workflow. All are nullable — the Prisma migration is `ALTER TABLE ADD COLUMN ... DEFAULT NULL` with zero risk to existing data. Existing code (campaigns, enrichment, UI, list management) ignores columns it doesn't reference, so this is a safe additive change.
@@ -70,7 +102,7 @@ The following optional fields are added to `crm_Targets` to support the automate
 | `last_order_date` | `String?` | Identifies repeat vs. one-time buyers for segmentation. |
 | `last_order_id` | `String?` | Traceability back to Stripe for debugging or customer service. |
 | `cumulative_order_count` | `String?` | First-time vs. repeat buyer segmentation. |
-| `contact_origin` | `String?` | How the target was created: `"stripe_webhook"`, `"csv_import"`, `"manual"`. |
+| `contact_origin` | `String?` | How the target was created: `"stripe_webhook"`, `"csv_import"`, `"manual"`, `"netlify_form"`. Accumulates multiple values if a target is ingested from more than one source. |
 | `opt_in_time` | `String?` | Compliance — records when the customer opted in to communications. |
 | `is_b2b` | `Boolean?` | B2B vs. B2C segmentation for different email content. |
 | `b2b_discount_percent` | `String?` | Discount data carried forward from old CRM. |
@@ -261,117 +293,125 @@ Best described as a **simple linear drip sequence with a single behavioral filte
 
 ---
 
-## 6. Recommended Email Marketing Workflow
+## 6. Multi-Source Ingestion Design
 
-This workflow uses the minimum set of NextCRM features needed for email marketing, stays within the application's intended design, and avoids the complexity of the full CRM pipeline until sales tracking is actually needed.
+This section documents the design decisions for how targets from different ingestion sources (Stripe purchases, Netlify Forms signups, future integrations) are segregated into meaningful target lists and routed through appropriate campaign workflows.
 
-### Data Ingestion Methods
+### 6.1 The `target_list` Field
 
-Two methods exist for getting buyer data into the Targets system:
+The ingestion API at `/api/crm/targets/ingest` accepts an optional `target_list` parameter in the request body. This parameter controls whether the ingested target is assigned to a pending list for automated campaign processing.
 
-#### Method A: Manual CSV Import (Batch / Historical)
+**Behavior when `target_list` is provided**: The system derives a pending list name using the pattern `pending-{target_list}` and either creates that list (if it doesn't exist) or finds the existing list. The target is then added to this pending list. For example, if `target_list` is `"post-purchase"`, the target is added to the `pending-post-purchase` list.
 
-Export contacts from the previous CRM as CSV. Import into NextCRM as targets via the web UI. Supported CSV fields: `first_name`, `last_name`, `email`, `company`, `position`, phone numbers, social profiles. Best for initial data migration and bulk historical imports.
+**Behavior when `target_list` is omitted**: The target is created (or updated if a matching email/stripe_customer_id already exists) in the targets database but is **not** assigned to any pending list. This is the "unconditional capture" behavior — the target is always persisted regardless of whether it has a list destination. Targets captured without a list can later be manually organized into lists via the CRM UI, or picked up by future automation.
 
-#### Method B: Automated Stripe Webhook Ingestion (Real-Time)
+**Why `target_list` is optional rather than required**: Different sources have different list routing needs. Stripe purchases have a clear campaign workflow (post-purchase email sequence), so the Lambda includes `target_list: "post-purchase"` in its request. But a Netlify Form collecting general inquiries might just want to capture the lead without immediately routing it to a campaign. Making `target_list` optional means the ingestion endpoint can serve both use cases without forcing callers to invent a list name when they don't have a campaign workflow in mind.
 
-An external Lambda function listens for Stripe webhook events (e.g., `checkout.session.completed`, `customer.created`) and POSTs customer data to the NextCRM ingestion API endpoint at `/api/crm/contacts/ingest`.
+**Request format examples**:
 
-**Current state (needs migration):** The ingestion endpoint currently creates **contacts** (`crm_Contacts`), which are invisible to the campaign system. This must be changed to create **targets** (`crm_Targets`) instead, since campaigns can only send to targets via target lists.
+With list routing (Stripe Lambda post-purchase):
+```json
+{
+  "email": "buyer@example.com",
+  "first_name": "Jane",
+  "last_name": "Doe",
+  "target_list": "post-purchase",
+  "contact_origin": "stripe_webhook",
+  "stripe_customer_id": "cus_abc123"
+}
+```
 
-**Required changes for automation:**
-1. Create a new ingestion endpoint (or modify existing) that writes to `crm_Targets` instead of `crm_Contacts`
-2. Auto-assign each new target to a standing target list (e.g., "Stripe Purchasers - Pending Post-Purchase Email")
-3. Store purchase metadata using available target fields (`tags`, `notes`, `description`) and any new schema fields added for Stripe data (e.g., `stripe_customer_id`)
-4. Handle deduplication by email (update existing target if found, create new if not)
+With list routing (Netlify Form B2C newsletter signup):
+```json
+{
+  "email": "subscriber@example.com",
+  "first_name": "Alex",
+  "target_list": "b2c-newsletter",
+  "contact_origin": "netlify_form"
+}
+```
 
-**Key file:** `app/api/crm/contacts/ingest/route.ts` — the current contact-based ingestion endpoint that the Lambda calls.
+Without list routing (general capture):
+```json
+{
+  "email": "visitor@example.com",
+  "first_name": "Pat",
+  "contact_origin": "netlify_form"
+}
+```
 
-### Automating Post-Purchase Email Delivery
+Batch mode with list routing:
+```json
+{
+  "target_list": "post-purchase",
+  "targets": [
+    { "email": "buyer1@example.com", "first_name": "Alice" },
+    { "email": "buyer2@example.com", "first_name": "Bob" }
+  ]
+}
+```
 
-The campaign system is batch-oriented: campaigns send to a fixed set of targets at a specific time. There is no built-in "send to each new target as they arrive." To bridge the continuous flow of Stripe purchases to the batch campaign system, the recommended approach is a **Daily Batch Cron** using the existing Inngest infrastructure.
+### 6.2 Root-Name-Driven Naming Convention
 
-#### Recommended: Daily Batch Cron via Inngest
+The system uses a **root name** concept to keep list names, campaign names, and template names consistent across the lifecycle of a campaign workflow. The root name is the value passed in the `target_list` parameter, and all derived names are built from it.
 
-**How it works:**
+**Format**: Root names use **kebab-case** (lowercase, hyphen-separated). Examples: `post-purchase`, `b2c-newsletter`, `b2b-newsletter`, `product-launch`.
 
-1. **Stripe purchase arrives** → Lambda calls ingestion API → target is created and added to the "Pending Post-Purchase" target list
-2. **Daily Inngest cron job** (e.g., every morning at 9am) runs and:
-   - Queries targets in the "Pending" list where `created_on` is 7+ days ago
-   - Filters out targets that have already received the post-purchase campaign (by checking `crm_campaign_sends`)
-   - If eligible targets exist: creates a dated batch target list (e.g., "Post-Purchase Batch 2026-05-23"), creates a campaign from the pre-built post-purchase template, triggers the send
-   - Moves processed targets from the "Pending" list to a "Sent" list for record-keeping
-3. **Campaign sends** proceed through the normal Inngest fan-out (send-step → Resend API → webhook tracking)
+**Derived names from a root**:
 
-**Why this approach:**
-- Uses 100% of existing campaign infrastructure (target lists, templates, Inngest, Resend, engagement tracking)
-- Creates proper campaign records visible in the dashboard with open/click/unsubscribe metrics
-- Batches efficiently — one campaign per day, not per purchase
-- The post-purchase email template can be managed via the CRM template editor UI
-- Multi-step follow-ups work naturally (e.g., a non-opener resend 3 days after the batch send)
-- The ~7 day delay is approximate (7-8 days depending on purchase time vs. cron time), which is acceptable since the delay is an estimate for delivery time
+| Purpose | Pattern | Example (root: `post-purchase`) |
+|---|---|---|
+| Pending list (intake) | `pending-{root}` | `pending-post-purchase` |
+| Sent list (after campaign send) | `sent-{root}` | `sent-post-purchase` |
+| Daily batch list | `{root}-batch-{YYYY-MM-DD}` | `post-purchase-batch-2026-05-28` |
+| Campaign name | `{root} — {YYYY-MM-DD}` | `post-purchase — 2026-05-28` |
 
-**Tradeoffs:**
-- Not a precise 7-day delay per customer (could be 7-8 days depending on when the daily cron runs relative to the original purchase)
-- Creates one campaign record per batch day (manageable, but accumulates over time)
-- Requires a new Inngest cron function to orchestrate the batch logic
+**Why kebab-case**: URL parameters (e.g., form submissions from Netlify Forms) naturally use kebab-case. The convention avoids encoding issues with spaces or special characters, and ensures consistency regardless of which external system is passing the `target_list` value. The CRM UI displays these names as-is, and kebab-case remains readable in the target list management views.
 
-#### Alternative Considered: Per-Purchase Inngest Delay
+**The CAMPAIGN_ROOT constant**: Each automated campaign workflow (like the post-purchase batch cron) defines a `CAMPAIGN_ROOT` constant at the top of its Inngest function file. This constant is the root name used to derive all related list and campaign names. For the post-purchase workflow, `CAMPAIGN_ROOT = "post-purchase"`. To create a new automated workflow (e.g., a B2C newsletter welcome sequence), you would create a new Inngest cron function with `CAMPAIGN_ROOT = "b2c-newsletter"`, and the same naming pattern would automatically produce `pending-b2c-newsletter`, `sent-b2c-newsletter`, etc.
 
-Each ingestion fires an Inngest event → Inngest function sleeps 7 days via `step.sleep("7d")` → creates a one-target campaign and sends. This gives an exact 7-day delay per customer but creates one campaign per purchase, which clutters the dashboard and doesn't support multi-step follow-ups as cleanly. Not recommended unless precise per-customer timing is critical.
+### 6.3 Unconditional Target Capture
 
-#### Alternative Considered: Direct Resend Send (Bypass Campaign System)
+A key design principle of the ingestion system is **unconditional target capture**: every target POSTed to the ingestion API is always created (or updated) in the `crm_Targets` table, regardless of whether a `target_list` parameter was provided. List routing is an optional second step that happens on top of the base capture.
 
-Send the email directly via the Resend API after a 7-day Inngest delay, without creating a campaign at all. This is the simplest implementation but loses all CRM tracking (no open/click/unsubscribe analytics, no campaign dashboard visibility, no follow-up capability). Not recommended since engagement tracking is important for iterating on post-purchase email effectiveness.
+**Why this matters**: In earlier design iterations, the ingestion endpoint was conceived as a pipeline where every target would be assigned to a list. This was changed because:
 
-### 6.1 Double-Send Prevention
+1. **No data loss**: If a form submission or webhook fires without specifying a `target_list` (due to misconfiguration, a new integration being tested, etc.), the target data is still captured. It can be organized into lists later.
+2. **Flexibility for future sources**: Not every ingestion source has a clear campaign workflow. A "Contact Us" Netlify Form might just need to capture leads for manual review, not route them into an automated email sequence.
+3. **Separation of concerns**: Capturing target data (who they are, where they came from) is a different concern from campaign routing (which email sequence should they receive). Keeping these decoupled makes the system easier to reason about and extend.
 
-The daily batch cron uses two layers of protection against duplicate sends:
+**How the `contact_origin` field relates to list routing**: The `contact_origin` field records how the target was created (e.g., `"stripe_webhook"`, `"netlify_form"`, `"csv_import"`, `"manual"`). This field accumulates values — if a target is first created by a Stripe webhook and later submitted through a Netlify Form, `contact_origin` will reflect both sources. However, `contact_origin` is **not** used for list routing or campaign assignment. It is a provenance record for auditing and segmentation, not an automation trigger. List routing is controlled exclusively by the `target_list` parameter at ingestion time.
 
-**Layer 1 — List-based gating (primary)**: The cron queries the "Pending Post-Purchase" target list. After processing, targets are moved from "Pending" to "Sent Post-Purchase". On the next run, processed targets are no longer in the query set.
+### 6.4 Ingestion Sources
 
-**Layer 2 — Send-record check (safety net)**: The cron also checks `crm_campaign_sends` for existing send records matching the post-purchase campaign template. This catches edge cases: a target remaining in Pending after a partial failure (campaign sent but list-move didn't complete), or a target accidentally re-added to Pending.
+The ingestion API is source-agnostic by design. Any external system that can send an HTTP POST with a JSON body can create targets. The following sources are currently planned or in use:
 
-The cron's effective query: *"Targets in the Pending list where `created_on` is 7+ days ago AND who have no `crm_campaign_sends` records for a post-purchase campaign."*
+#### Source 1: Stripe Webhook (via Lambda)
 
-### 6.2 Testing the Automation
+An external AWS Lambda function listens for Stripe webhook events (e.g., `checkout.session.completed`, `customer.created`) and POSTs customer data to `/api/crm/targets/ingest`. The Lambda includes `target_list: "post-purchase"` and `contact_origin: "stripe_webhook"` in the request body, which routes the target into the `pending-post-purchase` list for the daily batch cron to process.
 
-The Pending Post-Purchase target list enables simple manual testing without a test harness:
+**Deduplication**: Uses `stripe_customer_id` as the dedup key. If a returning customer makes a new purchase, the existing target is updated (with `last_order_date`, `cumulative_order_count`, etc.) rather than creating a duplicate.
 
-1. Create a target (e.g., "John Doe") with an email address you control.
-2. Add the target to the "Pending Post-Purchase" target list.
-3. Set `created_on` to a date 7+ days in the past so the cron immediately considers the target eligible.
-4. Manually trigger the Inngest cron function via the Inngest dashboard (or local dev server) — no need to wait for the scheduled run.
-5. Verify: target appears in a dated batch list (e.g., "Post-Purchase Batch 2026-05-23"), a campaign is created and sent, and the email arrives.
-6. Confirm the target was moved from "Pending" to the "Sent Post-Purchase" list.
+#### Source 2: Netlify Forms (Planned)
 
-### Step 2: Organize into Target Lists
+Netlify Forms can be configured to POST form submission data to the ingestion API via a Netlify serverless function that listens for the `submission-created` event, or via a direct webhook integration. The form submission handler would extract fields from the form data and POST them to `/api/crm/targets/ingest` with the appropriate `contact_origin: "netlify_form"` and an optional `target_list` value.
 
-Create target lists by product line or buyer category (e.g., "Widget A Buyers", "Service B Subscribers", "Newsletter Opt-ins"). Assign targets to appropriate lists. A single target can belong to multiple lists. For automated ingestion, the target list assignment happens automatically at ingestion time.
+**Routing options for forms**:
+- A newsletter signup form would include `target_list: "b2c-newsletter"` (or `"b2b-newsletter"` based on a form field), routing the subscriber into a pending list for an automated welcome sequence.
+- A general "Contact Us" form might omit `target_list` entirely, capturing the lead without automated campaign routing. The sales team would manually review and organize these targets.
+- The `target_list` value can be passed as a URL parameter on the form action or embedded as a hidden field, giving each form instance control over its routing destination without code changes to the ingestion endpoint.
 
-### Step 3: Create Email Templates
+#### Source 3: CSV Import (Manual)
 
-Use the campaign template editor. Use merge tags (`{{first_name}}`, `{{company}}`, etc.) for personalization. Templates are reusable across campaigns. For the post-purchase flow, create a dedicated template with the post-purchase materials content.
+The web CSV import (`actions/crm/targets/import-targets.ts`) creates targets directly in the database without going through the ingestion API. CSV-imported targets are not automatically assigned to any target list — they are added to lists manually through the CRM UI after import. The `contact_origin` for CSV imports is `"csv_import"`.
 
-### Step 4: Build Multi-Step Campaigns
+#### Adding Future Sources
 
-For each post-purchase flow, create a campaign with:
-
-| Step | Order | Delay | Example |
-|---|---|---|---|
-| Initial email | 0 | 0 days | Post-purchase materials / getting started guide |
-| Follow-up 1 | 1 | 3-7 days | Check-in, set `send_to` to `"all"` or `"non_openers"` |
-| Follow-up N | N | As needed | Additional touches |
-
-For automated flows, the daily batch cron handles campaign creation and triggering. For manual campaigns, assign relevant target list(s) and send immediately or schedule.
-
-### Step 5: Monitor Engagement
-
-Campaign detail page shows: sent count, delivered count, open rate, click rate, bounce rate. Individual recipient status visible in recipients table. Reports > Campaigns provides aggregate analytics. Automated batch campaigns appear in the campaign list with their batch date for easy identification.
-
-### Step 6: Convert High-Value Targets to Contacts (Only When Needed)
-
-If a target becomes a genuine sales prospect (reply, demo request, large order), manually convert via target edit form. Creates Account + Contact for CRM pipeline tracking. **Do not bulk-convert** -- this clutters the CRM with non-active sales records.
+To add a new ingestion source:
+1. Configure the external system to POST to `/api/crm/targets/ingest` with a Bearer token for authentication.
+2. Include `contact_origin` set to a descriptive value for the new source (e.g., `"shopify_webhook"`, `"typeform"`).
+3. Optionally include `target_list` with a kebab-case root name if the source should feed into an automated campaign workflow.
+4. If the source needs its own automated campaign, create a new Inngest cron function with a matching `CAMPAIGN_ROOT` constant (see Section 10.2 for the pattern).
 
 ---
 
@@ -380,8 +420,8 @@ If a target becomes a genuine sales prospect (reply, demo request, large order),
 | Limitation | Impact | Compliance risk |
 |---|---|---|
 | No global unsubscribe list | Unsubscribe is per-campaign; target can still receive other campaigns | **CAN-SPAM / GDPR** |
-| No automated target list management | New buyers must be manually CSV-imported and assigned to lists unless using the Stripe webhook automation (see Section 6) | Operational overhead |
-| No event-triggered campaigns | All campaigns are one-shot (send now or schedule); automated post-purchase flow uses daily batch cron as workaround (see Section 6) | Feature gap |
+| No automated target list management | New buyers must be manually CSV-imported and assigned to lists unless using the automated ingestion API with `target_list` parameter (see Section 6) | Operational overhead |
+| No event-triggered campaigns | All campaigns are one-shot (send now or schedule); automated post-purchase flow uses daily batch cron as workaround (see Section 10.2) | Feature gap |
 | No A/B testing | No subject line or content variant testing | Feature gap |
 | No unified send history after conversion | Campaign sends stay on target record; no cross-system email history | Data fragmentation |
 | No "openers only" follow-up filter | Cannot target only people who opened | Feature gap |
@@ -432,11 +472,140 @@ Maintain a "Do Not Email" target list and manually exclude it from all campaigns
 
 ---
 
-## 10. Key File References
+# Part II — Implementation
+
+---
+
+## 10. Recommended Email Marketing Workflow
+
+This workflow uses the minimum set of NextCRM features needed for email marketing, stays within the application's intended design, and avoids the complexity of the full CRM pipeline until sales tracking is actually needed.
+
+### 10.1 Data Ingestion Methods
+
+Three methods exist for getting data into the Targets system, each serving a different use case:
+
+#### Method A: Manual CSV Import (Batch / Historical)
+
+Export contacts from the previous CRM as CSV. Import into NextCRM as targets via the web UI. Supported CSV fields: `first_name`, `last_name`, `email`, `company`, `position`, phone numbers, social profiles. Best for initial data migration and bulk historical imports. CSV-imported targets are not automatically assigned to any target list.
+
+#### Method B: Automated Stripe Webhook Ingestion (Real-Time)
+
+An external Lambda function listens for Stripe webhook events (e.g., `checkout.session.completed`, `customer.created`) and POSTs customer data to the NextCRM ingestion API endpoint at `/api/crm/targets/ingest`.
+
+The Lambda includes `target_list: "post-purchase"` in the request body, which causes the ingestion endpoint to create the target and add it to the `pending-post-purchase` target list. The `contact_origin` is set to `"stripe_webhook"`. Purchase metadata is stored in the target's custom fields (`stripe_customer_id`, `first_order_date`, `last_order_date`, `last_order_id`, `cumulative_order_count`). Deduplication is handled by `stripe_customer_id` — returning customers update the existing target rather than creating a duplicate.
+
+**Key file:** `app/api/crm/targets/ingest/route.ts` — the target-based ingestion endpoint that the Lambda calls.
+
+#### Method C: Netlify Forms Ingestion (Planned — Real-Time)
+
+Netlify Forms can be used to capture signups, newsletter subscriptions, and other web form submissions. A serverless function or webhook handler would listen for form submission events and POST the captured data to `/api/crm/targets/ingest` with the appropriate `target_list` and `contact_origin: "netlify_form"`.
+
+Different forms can route to different target lists by varying the `target_list` parameter:
+- A B2C newsletter signup form would use `target_list: "b2c-newsletter"`, routing subscribers to `pending-b2c-newsletter` for an automated welcome sequence.
+- A B2B inquiry form might use `target_list: "b2b-newsletter"` for a B2B-specific drip campaign.
+- A general "Contact Us" form might omit `target_list` entirely, capturing the lead for manual review without automated campaign routing.
+
+See Section 6.4 (Source 2) for full design details on Netlify Forms integration.
+
+### 10.2 Automating Post-Purchase Email Delivery
+
+The campaign system is batch-oriented: campaigns send to a fixed set of targets at a specific time. There is no built-in "send to each new target as they arrive." To bridge the continuous flow of Stripe purchases to the batch campaign system, the recommended approach is a **Daily Batch Cron** using the existing Inngest infrastructure.
+
+#### Recommended: Daily Batch Cron via Inngest
+
+**How it works:**
+
+1. **Stripe purchase arrives** → Lambda calls `/api/crm/targets/ingest` with `target_list: "post-purchase"` → target is created and added to the `pending-post-purchase` target list
+2. **Daily Inngest cron job** (e.g., every morning at 9am) runs and:
+   - Queries targets in the `pending-post-purchase` list where `created_on` is 7+ days ago
+   - Filters out targets that have already received the post-purchase campaign (by checking `crm_campaign_sends`)
+   - If eligible targets exist: creates a dated batch target list (e.g., `post-purchase-batch-2026-05-28`), creates a campaign from the pre-built post-purchase template, triggers the send
+   - Moves processed targets from the `pending-post-purchase` list to the `sent-post-purchase` list for record-keeping
+3. **Campaign sends** proceed through the normal Inngest fan-out (send-step → Resend API → webhook tracking)
+
+**The `CAMPAIGN_ROOT` constant**: The cron function defines `const CAMPAIGN_ROOT = "post-purchase"` at the top of the file. All list and campaign names are derived from this constant using the naming patterns documented in Section 6.2. To create a new automated workflow (e.g., a B2C newsletter welcome sequence), duplicate the cron function file and change `CAMPAIGN_ROOT` to the new root name (e.g., `"b2c-newsletter"`). The same naming pattern produces `pending-b2c-newsletter`, `sent-b2c-newsletter`, `b2c-newsletter-batch-{date}`, etc.
+
+**Key file:** `inngest/functions/campaigns/post-purchase-batch.ts`
+
+**Why this approach:**
+- Uses 100% of existing campaign infrastructure (target lists, templates, Inngest, Resend, engagement tracking)
+- Creates proper campaign records visible in the dashboard with open/click/unsubscribe metrics
+- Batches efficiently — one campaign per day, not per purchase
+- The post-purchase email template can be managed via the CRM template editor UI
+- Multi-step follow-ups work naturally (e.g., a non-opener resend 3 days after the batch send)
+- The ~7 day delay is approximate (7-8 days depending on purchase time vs. cron time), which is acceptable since the delay is an estimate for delivery time
+- The `CAMPAIGN_ROOT` pattern makes it straightforward to add new automated workflows by duplicating the cron function and changing the root name
+
+**Tradeoffs:**
+- Not a precise 7-day delay per customer (could be 7-8 days depending on when the daily cron runs relative to the original purchase)
+- Creates one campaign record per batch day (manageable, but accumulates over time)
+- Requires a new Inngest cron function to orchestrate the batch logic
+
+#### Alternative Considered: Per-Purchase Inngest Delay
+
+Each ingestion fires an Inngest event → Inngest function sleeps 7 days via `step.sleep("7d")` → creates a one-target campaign and sends. This gives an exact 7-day delay per customer but creates one campaign per purchase, which clutters the dashboard and doesn't support multi-step follow-ups as cleanly. Not recommended unless precise per-customer timing is critical.
+
+#### Alternative Considered: Direct Resend Send (Bypass Campaign System)
+
+Send the email directly via the Resend API after a 7-day Inngest delay, without creating a campaign at all. This is the simplest implementation but loses all CRM tracking (no open/click/unsubscribe analytics, no campaign dashboard visibility, no follow-up capability). Not recommended since engagement tracking is important for iterating on post-purchase email effectiveness.
+
+### 10.3 Double-Send Prevention
+
+The daily batch cron uses two layers of protection against duplicate sends:
+
+**Layer 1 — List-based gating (primary)**: The cron queries the `pending-post-purchase` target list. After processing, targets are moved from `pending-post-purchase` to `sent-post-purchase`. On the next run, processed targets are no longer in the query set.
+
+**Layer 2 — Send-record check (safety net)**: The cron also checks `crm_campaign_sends` for existing send records matching the post-purchase campaign template. This catches edge cases: a target remaining in the pending list after a partial failure (campaign sent but list-move didn't complete), or a target accidentally re-added to the pending list.
+
+The cron's effective query: *"Targets in the `pending-post-purchase` list where `created_on` is 7+ days ago AND who have no `crm_campaign_sends` records for a post-purchase campaign."*
+
+### 10.4 Testing the Automation
+
+The `pending-post-purchase` target list enables simple manual testing without a test harness:
+
+1. Create a target (e.g., "John Doe") with an email address you control.
+2. Add the target to the `pending-post-purchase` target list.
+3. Set `created_on` to a date 7+ days in the past so the cron immediately considers the target eligible.
+4. Manually trigger the Inngest cron function via the Inngest dashboard (or local dev server) — no need to wait for the scheduled run.
+5. Verify: target appears in a dated batch list (e.g., `post-purchase-batch-2026-05-28`), a campaign is created and sent, and the email arrives.
+6. Confirm the target was moved from `pending-post-purchase` to the `sent-post-purchase` list.
+
+### 10.5 Organize into Target Lists
+
+Create target lists by product line or buyer category (e.g., `widget-a-buyers`, `service-b-subscribers`, `newsletter-opt-ins`). Assign targets to appropriate lists. A single target can belong to multiple lists. For automated ingestion, the target list assignment happens automatically at ingestion time via the `target_list` parameter. Use kebab-case for all list names to maintain consistency with the automated naming conventions (see Section 6.2).
+
+### 10.6 Create Email Templates
+
+Use the campaign template editor. Use merge tags (`{{first_name}}`, `{{company}}`, etc.) for personalization. Templates are reusable across campaigns. For the post-purchase flow, create a dedicated template with the post-purchase materials content.
+
+### 10.7 Build Multi-Step Campaigns
+
+For each post-purchase flow, create a campaign with:
+
+| Step | Order | Delay | Example |
+|---|---|---|---|
+| Initial email | 0 | 0 days | Post-purchase materials / getting started guide |
+| Follow-up 1 | 1 | 3-7 days | Check-in, set `send_to` to `"all"` or `"non_openers"` |
+| Follow-up N | N | As needed | Additional touches |
+
+For automated flows, the daily batch cron handles campaign creation and triggering. For manual campaigns, assign relevant target list(s) and send immediately or schedule.
+
+### 10.8 Monitor Engagement
+
+Campaign detail page shows: sent count, delivered count, open rate, click rate, bounce rate. Individual recipient status visible in recipients table. Reports > Campaigns provides aggregate analytics. Automated batch campaigns appear in the campaign list with their batch date for easy identification (e.g., `post-purchase — 2026-05-28`).
+
+### 10.9 Convert High-Value Targets to Contacts (Only When Needed)
+
+If a target becomes a genuine sales prospect (reply, demo request, large order), manually convert via target edit form. Creates Account + Contact for CRM pipeline tracking. **Do not bulk-convert** -- this clutters the CRM with non-active sales records.
+
+---
+
+## 11. Key File References
 
 | Component | Path |
 |---|---|
-| Stripe customer ingestion API (currently contacts, needs migration to targets) | `app/api/crm/contacts/ingest/route.ts` |
+| Target ingestion API (multi-source, supports `target_list` routing) | `app/api/crm/targets/ingest/route.ts` |
+| Contact ingestion API (legacy, does not support `target_list`) | `app/api/crm/contacts/ingest/route.ts` |
 | CSV target import action | `actions/crm/targets/import-targets.ts` |
 | CLI contact importer | `scripts/import/crm-contact-importer.ts` |
 | Target creation action | `actions/crm/targets/create-target.ts` |
@@ -450,6 +619,7 @@ Maintain a "Do Not Email" target list and manually exclude it from all campaigns
 | Inngest campaign immediate send | `inngest/functions/campaigns/send-now.ts` |
 | Inngest campaign send step | `inngest/functions/campaigns/send-step.ts` |
 | Follow-up processing (Inngest) | `inngest/functions/campaigns/process-follow-up.ts` |
+| Post-purchase batch cron (Inngest) | `inngest/functions/campaigns/post-purchase-batch.ts` |
 | Inngest client config | `inngest/client.ts` |
 | Campaign steps schema | `prisma/schema.prisma` (lines 337-356, `crm_campaign_steps` table) |
 | Campaign sends schema | `prisma/schema.prisma` (`crm_campaign_sends` table) |
@@ -460,12 +630,13 @@ Maintain a "Do Not Email" target list and manually exclude it from all campaigns
 | Update target action | `actions/crm/targets/update-target.ts` |
 | Next.js config (redirects) | `next.config.js` |
 | Stripe fields migration (targets) | `prisma/migrations/20260525000000_add_stripe_fields_to_targets/migration.sql` |
+| Decimal serialization utility | `lib/serialize-decimals.ts` |
 
 ---
 
-## 11. Implementation Log
+## 12. Implementation Log
 
-### 11.1 Fix: 405 Error on POST /api/crm/targets/ingest
+### 12.1 Fix: 405 Error on POST /api/crm/targets/ingest
 
 **Date**: 2026-05-25
 **Symptom**: The Stripe ingestion Lambda received a 405 (Method Not Allowed) when POSTing to `/api/crm/targets/ingest`.
@@ -480,7 +651,7 @@ Two separate root causes were discovered during investigation:
 - `next.config.js` — Constrained redirect `:locale` parameter from wildcard to `(en|cz|de|uk)` for both `/crm/targets/` and `/crm/target-lists/` redirects
 - `prisma/migrations/20260525000000_add_stripe_fields_to_targets/migration.sql` — New migration adding 10 Stripe/automation columns and 3 indexes to the `crm_Targets` table
 
-### 11.2 Enhancement: Target Detail View — Custom Fields Card
+### 12.2 Enhancement: Target Detail View — Custom Fields Card
 
 **Date**: 2026-05-25
 **Context**: The previous fix added database columns and a migration for the new Stripe/automation fields on `crm_Targets`, but the target detail UI did not render any of those fields. When viewing a target, users would only see the original fields (name, company, contact info, social networks) with no visibility into the Stripe-synced data.
@@ -492,3 +663,19 @@ The `updateTarget` server action was also updated to accept all 10 new fields in
 **Files changed:**
 - `app/[locale]/(routes)/campaigns/targets/[targetId]/components/BasicView.tsx` — Added "Custom Fields" card displaying all 10 Stripe/automation fields
 - `actions/crm/targets/update-target.ts` — Added the 10 new fields to the action's TypeScript type definition
+
+### 12.3 Multi-Source Ingestion — `target_list` Field and Naming Convention
+
+**Date**: 2026-05-28
+**Context**: The ingestion endpoint was originally hardcoded to assign every incoming target to a single "Pending Post-Purchase" target list. The design discussions in attempts 1-3 established a multi-source ingestion pattern where different sources (Stripe, Netlify Forms, future integrations) can route targets to different pending lists based on a `target_list` parameter, or capture targets without any list assignment at all.
+
+**Design decisions documented**:
+- The `target_list` field on the ingestion endpoint is optional. When provided, the system derives a pending list name using the `pending-{target_list}` pattern. When omitted, the target is captured unconditionally without list assignment.
+- All list names use kebab-case (e.g., `pending-post-purchase`, `sent-post-purchase`, `post-purchase-batch-2026-05-28`).
+- The `CAMPAIGN_ROOT` constant in each Inngest cron function serves as the root name from which all related list and campaign names are derived.
+- `contact_origin` accumulates source values for provenance tracking but is not used for list routing or campaign assignment.
+- Netlify Forms is identified as the next planned ingestion source, with form-specific `target_list` values controlling routing to different campaign workflows.
+
+**Code changes** (implemented in prior agent runs):
+- `app/api/crm/targets/ingest/route.ts` — Added optional `target_list` field support; pending list creation uses `pending-{target_list}` pattern; targets without `target_list` are captured without list assignment
+- `inngest/functions/campaigns/post-purchase-batch.ts` — Replaced hardcoded list names with `CAMPAIGN_ROOT`-driven derivation (`pending-${CAMPAIGN_ROOT}`, `sent-${CAMPAIGN_ROOT}`, `${CAMPAIGN_ROOT}-batch-${date}`)

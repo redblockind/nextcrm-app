@@ -4,8 +4,6 @@ import { validateApiToken } from "@/lib/api-tokens";
 
 export const runtime = "nodejs";
 
-const PENDING_LIST_NAME = "Pending Post-Purchase";
-
 const STRING_FIELDS = [
   "first_name",
   "last_name",
@@ -107,12 +105,13 @@ function mergeStripeCustomerIds(
 }
 
 type ResultEntry =
-  | { email: string; action: "created"; id: string; added_to_pending: boolean }
+  | { email: string; action: "created"; id: string; target_list?: string }
   | {
       email: string;
       action: "updated";
       id: string;
       stripe_id_appended?: boolean;
+      target_list?: string;
     }
   | { email: string; action: "conflict"; matches: string[] };
 
@@ -124,18 +123,20 @@ function buildPayload(t: IncomingTarget): Record<string, unknown> {
   return data;
 }
 
-async function getOrCreatePendingList(userId: string): Promise<string> {
+async function getOrCreateTargetList(
+  listName: string,
+  userId: string
+): Promise<string> {
   const existing = await prismadb.crm_TargetLists.findFirst({
-    where: { name: PENDING_LIST_NAME, deletedAt: null },
+    where: { name: listName, deletedAt: null },
     select: { id: true },
   });
   if (existing) return existing.id;
 
   const created = await prismadb.crm_TargetLists.create({
     data: {
-      name: PENDING_LIST_NAME,
-      description:
-        "Auto-populated by Stripe ingestion. Daily cron processes targets 7+ days old.",
+      name: listName,
+      description: `Auto-created target list for campaign pipeline.`,
       created_by: userId,
     },
     select: { id: true },
@@ -146,7 +147,8 @@ async function getOrCreatePendingList(userId: string): Promise<string> {
 async function processTarget(
   t: IncomingTarget,
   userId: string,
-  pendingListId: string
+  pendingListId: string | null,
+  pendingListName: string | null
 ): Promise<ResultEntry> {
   const email = (t.email as string).trim();
 
@@ -181,17 +183,20 @@ async function processTarget(
       select: { id: true },
     });
 
-    let addedToPending = false;
-    try {
-      await prismadb.targetsToTargetLists.create({
-        data: { target_id: created.id, target_list_id: pendingListId },
-      });
-      addedToPending = true;
-    } catch {
-      // skipDuplicates not available on create, but duplicates shouldn't happen for new targets
+    const result: ResultEntry = { email, action: "created", id: created.id };
+
+    if (pendingListId) {
+      try {
+        await prismadb.targetsToTargetLists.create({
+          data: { target_id: created.id, target_list_id: pendingListId },
+        });
+        result.target_list = pendingListName!;
+      } catch {
+        // duplicate guard — shouldn't happen for new targets
+      }
     }
 
-    return { email, action: "created", id: created.id, added_to_pending: addedToPending };
+    return result;
   }
 
   const existing = matches[0];
@@ -218,6 +223,18 @@ async function processTarget(
 
   const result: ResultEntry = { email, action: "updated", id: existing.id };
   if (stripeAppended) result.stripe_id_appended = true;
+
+  if (pendingListId) {
+    try {
+      await prismadb.targetsToTargetLists.create({
+        data: { target_id: existing.id, target_list_id: pendingListId },
+      });
+      result.target_list = pendingListName!;
+    } catch {
+      // already in list — skip
+    }
+  }
+
   return result;
 }
 
@@ -259,8 +276,16 @@ export async function POST(req: Request) {
   const isBatch = Array.isArray(root.targets);
 
   let targets: IncomingTarget[];
+  let targetListRoot: string | null = null;
+
+  if (typeof root.target_list === "string" && root.target_list.trim() !== "") {
+    targetListRoot = root.target_list.trim();
+  }
+
   if (isBatch) {
-    const extras = Object.keys(root).filter((k) => k !== "targets");
+    const extras = Object.keys(root).filter(
+      (k) => k !== "targets" && k !== "target_list"
+    );
     if (extras.length > 0) {
       return NextResponse.json(
         {
@@ -279,7 +304,8 @@ export async function POST(req: Request) {
       );
     }
   } else {
-    targets = [root as IncomingTarget];
+    const { target_list: _tl, ...rest } = root;
+    targets = [rest as IncomingTarget];
   }
 
   for (let i = 0; i < targets.length; i++) {
@@ -293,12 +319,20 @@ export async function POST(req: Request) {
     }
   }
 
-  const pendingListId = await getOrCreatePendingList(userId);
+  let pendingListId: string | null = null;
+  let pendingListName: string | null = null;
+
+  if (targetListRoot) {
+    pendingListName = `pending-${targetListRoot}`;
+    pendingListId = await getOrCreateTargetList(pendingListName, userId);
+  }
 
   const results: ResultEntry[] = [];
   for (const t of targets) {
     try {
-      results.push(await processTarget(t, userId, pendingListId));
+      results.push(
+        await processTarget(t, userId, pendingListId, pendingListName)
+      );
     } catch (err) {
       console.error("[INGEST_TARGET_FAILED]", {
         email: typeof t.email === "string" ? t.email : null,
