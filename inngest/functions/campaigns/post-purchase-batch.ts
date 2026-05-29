@@ -86,7 +86,7 @@ export const postPurchaseBatchCron = inngest.createFunction(
 
     const template = await step.run("find-template", async () => {
       return prismadb.crm_campaign_templates.findFirst({
-        where: { tags: { has: CAMPAIGN_ROOT } },
+        where: { name: CAMPAIGN_ROOT, deletedAt: null },
         select: { id: true, subject_default: true, content_html: true },
       });
     });
@@ -94,7 +94,7 @@ export const postPurchaseBatchCron = inngest.createFunction(
     if (!template) {
       return {
         dispatched: 0,
-        reason: `no template tagged "${CAMPAIGN_ROOT}" found — create one first`,
+        reason: `no template named "${CAMPAIGN_ROOT}" found — create one first`,
       };
     }
 

@@ -1,7 +1,7 @@
 # NextCRM Email Marketing Workflow Analysis
 
 > **Purpose**: Reference guide for AI agents and humans working with the NextCRM email marketing system.
-> **Last validated**: 2026-05-28
+> **Last validated**: 2026-05-29
 > **Source**: Code analysis of the NextCRM codebase (multiple agent runs consolidated).
 
 ---
@@ -31,6 +31,7 @@
 - [10. Recommended Email Marketing Workflow](#10-recommended-email-marketing-workflow)
 - [10.1 Data Ingestion Methods](#101-data-ingestion-methods)
 - [10.2 Automating Post-Purchase Email Delivery](#102-automating-post-purchase-email-delivery)
+- [10.2.0 Automation Boundary — What Is Automatic vs. What Is Manual](#1020-automation-boundary--what-is-automatic-vs-what-is-manual)
 - [10.3 Double-Send Prevention](#103-double-send-prevention)
 - [10.4 Testing the Automation](#104-testing-the-automation)
 - [10.5 Organize into Target Lists](#105-organize-into-target-lists)
@@ -43,6 +44,8 @@
 - [12.1 Fix: 405 Error on POST /api/crm/targets/ingest](#121-fix-405-error-on-post-apicrmtargetsingest)
 - [12.2 Enhancement: Target Detail View — Custom Fields Card](#122-enhancement-target-detail-view--custom-fields-card)
 - [12.3 Multi-Source Ingestion — target_list Field and Naming Convention](#123-multi-source-ingestion--target_list-field-and-naming-convention)
+- [12.4 Clarification — Automation Boundary and Template-Tag Selection](#124-clarification--automation-boundary-and-template-tag-selection)
+- [12.5 Change — Template Lookup Switched from Tag to Root-Name Convention](#125-change--template-lookup-switched-from-tag-to-root-name-convention)
 
 ---
 
@@ -365,6 +368,7 @@ The system uses a **root name** concept to keep list names, campaign names, and 
 | Sent list (after campaign send) | `sent-{root}` | `sent-post-purchase` |
 | Daily batch list | `{root}-batch-{YYYY-MM-DD}` | `post-purchase-batch-2026-05-28` |
 | Campaign name | `{root} — {YYYY-MM-DD}` | `post-purchase — 2026-05-28` |
+| Template name (manual setup) | `{root}` | `post-purchase` |
 
 **Why kebab-case**: URL parameters (e.g., form submissions from Netlify Forms) naturally use kebab-case. The convention avoids encoding issues with spaces or special characters, and ensures consistency regardless of which external system is passing the `target_list` value. The CRM UI displays these names as-is, and kebab-case remains readable in the target list management views.
 
@@ -511,17 +515,41 @@ See Section 6.4 (Source 2) for full design details on Netlify Forms integration.
 
 The campaign system is batch-oriented: campaigns send to a fixed set of targets at a specific time. There is no built-in "send to each new target as they arrive." To bridge the continuous flow of Stripe purchases to the batch campaign system, the recommended approach is a **Daily Batch Cron** using the existing Inngest infrastructure.
 
-#### Recommended: Daily Batch Cron via Inngest
+#### 10.2.0 Automation Boundary — What Is Automatic vs. What Is Manual
 
-**How it works:**
+This is the single most important thing to internalize about the post-purchase flow, and it is a common source of confusion. **For the automated post-purchase workflow, the campaign is created automatically by the cron — you do NOT create it by hand.** The only thing a human prepares ahead of time is the email *template*. The table below is the authoritative split.
 
-1. **Stripe purchase arrives** → Lambda calls `/api/crm/targets/ingest` with `target_list: "post-purchase"` → target is created and added to the `pending-post-purchase` target list
-2. **Daily Inngest cron job** (e.g., every morning at 9am) runs and:
-   - Queries targets in the `pending-post-purchase` list where `created_on` is 7+ days ago
-   - Filters out targets that have already received the post-purchase campaign (by checking `crm_campaign_sends`)
-   - If eligible targets exist: creates a dated batch target list (e.g., `post-purchase-batch-2026-05-28`), creates a campaign from the pre-built post-purchase template, triggers the send
-   - Moves processed targets from the `pending-post-purchase` list to the `sent-post-purchase` list for record-keeping
-3. **Campaign sends** proceed through the normal Inngest fan-out (send-step → Resend API → webhook tracking)
+| Step in the flow | Automatic or manual? | Who/what does it |
+|---|---|---|
+| Create the `pending-post-purchase` target list | **Automatic** | The ingestion API (`/api/crm/targets/ingest`) creates it on first use via `getOrCreateTargetList`, derived as `pending-{target_list}` from the Lambda's `target_list: "post-purchase"`. |
+| Add the incoming target to that pending list | **Automatic** | The ingestion API adds the target on both the create and update paths. |
+| Create the email **template** named `post-purchase` | **Manual (one-time)** | A human builds the template in the campaign template editor and gives it the name `post-purchase` (matching `CAMPAIGN_ROOT`). This is the *only* required manual setup step, and it is done entirely through the existing template editor UI. |
+| Create the **campaign** | **Automatic** | The daily cron (`post-purchase-batch.ts`) creates a brand-new dated campaign each run (`post-purchase — {date}`). It is **not** created manually. |
+| Create the dated batch target list (`post-purchase-batch-{date}`) | **Automatic** | The cron creates it and populates it with that day's eligible targets. |
+| Choose which template the campaign uses | **Automatic (by name)** | The cron looks up the template named `post-purchase` — see 10.2 "How it works" step 2d below. The choice is expressed by *naming the template after the root*, not by selecting it at campaign-creation time. |
+| Send the emails + track engagement | **Automatic** | Standard Inngest fan-out → Resend → webhook tracking. |
+| Move processed targets to `sent-post-purchase` | **Automatic** | The cron moves them after dispatch. |
+
+**Correcting two common assumptions:**
+
+1. *"The campaign must be created manually with the root name."* — Not for the automated flow. The cron creates the campaign itself. The manual prerequisite is the **template** (named `post-purchase`), not the campaign. Manual campaign creation via the wizard (Section 4.1) is a *separate* path used for ad-hoc/one-off campaigns, not for the automated post-purchase sequence.
+2. *"The cron runs an existing campaign if one exists with the correct name."* — No. The cron does not look up or re-run a pre-existing campaign by name. Each run it **creates a fresh dated campaign** from the named template, provided the preconditions below are met.
+
+#### How it works:
+
+The cron is `postPurchaseBatchCron` in `inngest/functions/campaigns/post-purchase-batch.ts`, scheduled `0 9 * * *` (daily at **09:00 UTC**). On each run it executes these steps in order, bailing out early (dispatching nothing) if any precondition is unmet:
+
+1. **Stripe purchase arrives** → Lambda calls `/api/crm/targets/ingest` with `target_list: "post-purchase"` → target is created and added to the `pending-post-purchase` target list (this happens continuously, independent of the cron).
+2. **The daily cron** then:
+   - **2a. Finds the pending list** `pending-post-purchase`. If it does not exist, the cron exits (`reason: "no pending list found"`).
+   - **2b. Finds eligible targets** — members of the pending list whose native `created_on` is **7+ days** in the past. If none are old enough, it exits (`reason: "no eligible targets (all too recent)"`).
+   - **2c. Filters out already-sent targets** by checking `crm_campaign_sends` for records tied to any campaign carrying the `post-purchase` marker tag (matched on the campaign's `tags` array). This marker is stamped automatically by the cron when it creates each dated campaign (step 2f) — it is an internal idempotency marker, not a manual setup step. If all remaining targets were already sent, it exits.
+   - **2d. Selects the template by name** — `crm_campaign_templates.findFirst({ where: { name: "post-purchase", deletedAt: null } })`, i.e. the template named after the campaign root. **If no template with that name exists, the cron exits** (`reason: 'no template named "post-purchase" found — create one first'`). This is why creating a template named `post-purchase` is the one required manual setup step. Because the name is set in the existing template editor, this step needs no out-of-band database access.
+   - **2e. Creates the dated batch list** `post-purchase-batch-{date}` and adds the eligible targets to it.
+   - **2f. Creates the campaign** `post-purchase — {date}`, stamped with the internal `[post-purchase]` marker tag, with `template_id` set to the named template and a single order-0 step. The step's subject is `template.subject_default` (falling back to `"Your post-purchase materials"`). The campaign's audience is the dated batch list, **not** the pending list directly.
+   - **2g. Creates send records, marks the campaign `sending`, and fans out** one `campaigns/send-step` event per recipient.
+   - **2h. Moves processed targets** from `pending-post-purchase` to `sent-post-purchase` (creating the sent list if needed) for record-keeping.
+3. **Campaign sends** proceed through the normal Inngest fan-out (send-step → Resend API → webhook tracking).
 
 **The `CAMPAIGN_ROOT` constant**: The cron function defines `const CAMPAIGN_ROOT = "post-purchase"` at the top of the file. All list and campaign names are derived from this constant using the naming patterns documented in Section 6.2. To create a new automated workflow (e.g., a B2C newsletter welcome sequence), duplicate the cron function file and change `CAMPAIGN_ROOT` to the new root name (e.g., `"b2c-newsletter"`). The same naming pattern produces `pending-b2c-newsletter`, `sent-b2c-newsletter`, `b2c-newsletter-batch-{date}`, etc.
 
@@ -555,9 +583,9 @@ The daily batch cron uses two layers of protection against duplicate sends:
 
 **Layer 1 — List-based gating (primary)**: The cron queries the `pending-post-purchase` target list. After processing, targets are moved from `pending-post-purchase` to `sent-post-purchase`. On the next run, processed targets are no longer in the query set.
 
-**Layer 2 — Send-record check (safety net)**: The cron also checks `crm_campaign_sends` for existing send records matching the post-purchase campaign template. This catches edge cases: a target remaining in the pending list after a partial failure (campaign sent but list-move didn't complete), or a target accidentally re-added to the pending list.
+**Layer 2 — Send-record check (safety net)**: The cron also checks `crm_campaign_sends` for existing send records tied to any campaign carrying the `post-purchase` marker tag (matched on the campaign's `tags` array, not on the template). This tag is an internal marker the cron stamps on every dated campaign it creates — it is not a manual setup step and is distinct from how the template is identified (the template is matched by **name**, see Section 10.6). This layer catches edge cases: a target remaining in the pending list after a partial failure (campaign sent but list-move didn't complete), or a target accidentally re-added to the pending list.
 
-The cron's effective query: *"Targets in the `pending-post-purchase` list where `created_on` is 7+ days ago AND who have no `crm_campaign_sends` records for a post-purchase campaign."*
+The cron's effective query: *"Targets in the `pending-post-purchase` list where `created_on` is 7+ days ago AND who have no `crm_campaign_sends` records tied to any campaign carrying the `post-purchase` marker tag."*
 
 ### 10.4 Testing the Automation
 
@@ -576,7 +604,16 @@ Create target lists by product line or buyer category (e.g., `widget-a-buyers`, 
 
 ### 10.6 Create Email Templates
 
-Use the campaign template editor. Use merge tags (`{{first_name}}`, `{{company}}`, etc.) for personalization. Templates are reusable across campaigns. For the post-purchase flow, create a dedicated template with the post-purchase materials content.
+Use the campaign template editor. Use merge tags (`{{first_name}}`, `{{company}}`, etc.) for personalization. Templates are reusable across campaigns.
+
+**Manual campaigns** select their template explicitly in the creation wizard (Step 2, Section 4.1); the chosen `template_id` is stored on the campaign and on each step.
+
+**Automated campaigns choose their template by name, not by selection.** For the post-purchase flow, create a dedicated template with the post-purchase content and **name it `post-purchase`** (matching `CAMPAIGN_ROOT`). The daily cron locates it with `findFirst({ where: { name: "post-purchase", deletedAt: null } })`. Two caveats follow from this:
+
+- The template **must exist with that exact name before the cron runs**, or the cron exits without sending (see Section 10.2 step 2d).
+- If **more than one** non-deleted template shares the name `post-purchase`, `findFirst` returns one of them with no defined ordering — keep exactly one template per automated root to avoid ambiguity.
+
+The same pattern applies to any future automated root (e.g. a template named `b2c-newsletter` for a `b2c-newsletter` cron). Because the template name is set in the existing template editor, identifying it this way keeps the whole pipeline — pending list, sent list, batch list, campaign, and template — keyed off one human-readable root string and configurable entirely through the UI, with no out-of-band database setup.
 
 ### 10.7 Build Multi-Step Campaigns
 
@@ -679,3 +716,46 @@ The `updateTarget` server action was also updated to accept all 10 new fields in
 **Code changes** (implemented in prior agent runs):
 - `app/api/crm/targets/ingest/route.ts` — Added optional `target_list` field support; pending list creation uses `pending-{target_list}` pattern; targets without `target_list` are captured without list assignment
 - `inngest/functions/campaigns/post-purchase-batch.ts` — Replaced hardcoded list names with `CAMPAIGN_ROOT`-driven derivation (`pending-${CAMPAIGN_ROOT}`, `sent-${CAMPAIGN_ROOT}`, `${CAMPAIGN_ROOT}-batch-${date}`)
+
+### 12.4 Clarification — Automation Boundary and Template-Tag Selection
+
+**Date**: 2026-05-29
+**Context**: A review of the live `post-purchase-batch.ts` cron and the `targets/ingest` route was performed to confirm exactly what is automated versus manual in the post-purchase flow, and to correct two mistaken assumptions held while reasoning about the system. No code was changed in this pass — only the documentation was clarified to match the verified behavior.
+
+> **Superseded in part by Section 12.5**: this entry records the system as it behaved *before* the template lookup was changed. The findings about the automation boundary, campaign creation, and double-send prevention still hold. The specific finding that the template is selected **by tag** is no longer current — the cron now selects the template **by name**. See Section 12.5.
+
+**Findings verified against code**:
+
+- **Pending list + target capture are automatic (assumption confirmed)**: When the Stripe Lambda POSTs with `target_list: "post-purchase"`, the ingestion route derives `pending-post-purchase`, creates the list if absent (`getOrCreateTargetList`), and adds the target on both the create and update paths. Confirmed in `app/api/crm/targets/ingest/route.ts`.
+- **The campaign is created automatically, not manually (assumption corrected)**: The daily cron creates a fresh dated campaign (`post-purchase — {date}`, tagged `[post-purchase]`) on every qualifying run. There is no manual campaign-creation step in the automated flow. The only required manual setup is an email **template tagged `post-purchase`**.
+- **The cron does not "run an existing campaign by name" (assumption corrected)**: It builds a new campaign each run from the tagged template, gated by four preconditions (pending list exists, targets are 7+ days old, not already sent under a `post-purchase`-tagged campaign, and a `post-purchase`-tagged template exists). Each precondition has its own early-exit reason string.
+- **The template is selected by tag for automated flows**: `crm_campaign_templates.findFirst({ where: { tags: { has: "post-purchase" } } })`. Manual campaigns, by contrast, select a template explicitly in the wizard. A caveat was documented: multiple templates sharing the tag make `findFirst` non-deterministic.
+- **No abandoned-cart cron exists (assumption confirmed)**: `postPurchaseBatchCron` is the only campaign cron registered in `app/api/inngest/route.ts`. Adding an abandoned-cart flow would follow the `CAMPAIGN_ROOT` pattern: a new cron file with `CAMPAIGN_ROOT = "abandoned-cart"`, the Lambda sending `target_list: "abandoned-cart"`, and a template tagged `abandoned-cart`.
+
+**Doc changes**:
+- Added Section 10.2.0 "Automation Boundary — What Is Automatic vs. What Is Manual" with a responsibility table and explicit correction of the two assumptions.
+- Rewrote the Section 10.2 "How it works" steps to reflect the cron's exact step sequence, schedule (`0 9 * * *`, 09:00 UTC), and early-exit conditions.
+- Corrected Section 10.3 Layer 2 to state the safety-net check matches campaigns by the `post-purchase` **tag** (not by template).
+- Expanded Section 10.6 to document template selection by tag for automated flows and the single-template-per-root caveat.
+
+### 12.5 Change — Template Lookup Switched from Tag to Root-Name Convention
+
+**Date**: 2026-05-29
+**Context**: Section 12.4 documented that the post-purchase cron located its email template by a `tags: { has: "post-purchase" }` lookup. Investigation showed that the `tags` field on `crm_campaign_templates` cannot be set anywhere in the product UI — neither the template editor nor any server action reads or writes it. The only way to tag a template was to edit the database directly, making the one required manual setup step invisible and undiscoverable. The lists, batch lists, and campaign in the same pipeline are already keyed off the human-readable root name, so the template was the lone exception relying on a hidden field.
+
+**Decision**: Switch the template lookup to the root-name convention so the entire pipeline keys off one human-readable root string, and the required manual setup (creating the template) is done entirely through the existing template editor with no out-of-band database access.
+
+**Code change**:
+- `inngest/functions/campaigns/post-purchase-batch.ts` — the `find-template` step now queries `crm_campaign_templates.findFirst({ where: { name: CAMPAIGN_ROOT, deletedAt: null } })` instead of `{ tags: { has: CAMPAIGN_ROOT } }`. The early-exit reason string was updated to `no template named "post-purchase" found — create one first`. No other behavior changed.
+
+**What was intentionally left unchanged**: The campaign's `tags: [CAMPAIGN_ROOT]` value is still stamped on each dated campaign the cron creates, and the double-send safety net still matches campaigns on that tag. This tag is an internal idempotency marker applied automatically by the cron — it requires no manual setup and is not the invisible-configuration problem that motivated the template change, so it was kept as-is.
+
+**Operator impact**: The post-purchase email template must now be **named** `post-purchase` (matching `CAMPAIGN_ROOT`) rather than tagged. Any existing template that was previously relying on the `post-purchase` tag must be renamed to `post-purchase` for the cron to find it.
+
+**Doc changes**:
+- Updated Section 6.2 to add the template name (`{root}`) to the derived-names table.
+- Updated the Section 10.2.0 responsibility table and assumption corrections to describe template selection by name.
+- Updated Section 10.2 step 2d to describe the name-based lookup and its early-exit reason, and clarified step 2c/2f that the campaign tag is an internal marker.
+- Updated Section 10.3 Layer 2 to clarify the campaign marker tag is auto-applied and distinct from template identification.
+- Updated Section 10.6 to document template selection by name and the single-template-per-root caveat.
+- Added the superseding note to Section 12.4.
