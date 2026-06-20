@@ -319,13 +319,17 @@ export async function POST(req: Request) {
     }
   }
 
-  let pendingListId: string | null = null;
-  let pendingListName: string | null = null;
-
-  if (targetListRoot) {
-    pendingListName = `pending-${targetListRoot}`;
-    pendingListId = await getOrCreateTargetList(pendingListName, userId);
-  }
+  // --- Automated funnel target-list creation: DISABLED ---
+  // Previously an incoming `target_list` value made NextCRM auto-create and assign
+  // a `pending-{funnel}` target list — the in-app email-funnel mechanism. That
+  // automation now lives in Listmonk, so it is intentionally turned off here.
+  // The `target_list` field is still accepted on the request (the Stripe Lambda and
+  // website-form payloads stay unchanged) but is no longer acted upon; no list is
+  // created and no target is assigned to one.
+  // To re-enable, restore the getOrCreateTargetList() call (kept below for that).
+  const pendingListId: string | null = null;
+  const pendingListName: string | null = null;
+  void targetListRoot;
 
   const results: ResultEntry[] = [];
   for (const t of targets) {
