@@ -271,3 +271,216 @@ field. The `…/contacts/ingest` endpoint mirrors this design for contacts.
 Both reduce to the same operation because our customizations are small, additive, and captured
 here. Keep this document current whenever the custom delta changes, and the recovery stays
 true.
+
+---
+
+## 9. Operator runbook — exact commands, in order (for a human, no local DB needed)
+
+> **Who this is for:** the person actually performing the recovery at a keyboard. Sections 1–8
+> explain *why*; this section is the *what-to-type, in what order*. Follow it top to bottom.
+>
+> **What you need:** `git` and `node` (v18+) installed, a clone of the fork, GitHub access, and
+> a browser for the **Neon** and **Netlify** dashboards. **You do NOT need PostgreSQL installed
+> locally.** Every database operation happens either in the Neon dashboard (the restore point)
+> or automatically at **Netlify build time**. The only schema commands you run locally —
+> `npx prisma format` and `npx prisma validate` — just read the schema *file*; they never open a
+> database connection. (This works even with no `DATABASE_URL` set because our `prisma.config.ts`
+> degrades gracefully — see §3b.)
+
+### Where am I right now?
+
+The single most important thing to know: **running `scripts/disaster-recovery/restore-customizations.sh`
+is the core of the recovery, and it happens at Step 4 below.** If you have been doing `git checkout`
+gymnastics and have *not* run that script yet, you are not "nearly finished" — you are at the
+*start*. Almost all the real work (Steps 4–9) is still ahead. The git steps before it only exist
+to hand the script a clean starting point.
+
+---
+
+### Step 0 — Confirm both GitHub remotes exist
+
+The script rebuilds from **upstream** and re-applies **your** delta, so it needs both remotes.
+
+```bash
+git remote -v
+# Expect to see BOTH:
+#   origin    -> redblockind/nextcrm-app   (your fork — your customizations)
+#   upstream  -> pdovhomilja/nextcrm-app   (clean base to rebuild from)
+
+# If 'upstream' is missing, add it:
+git remote add upstream https://github.com/pdovhomilja/nextcrm-app.git
+
+# Pull the latest of both:
+git fetch upstream
+git fetch origin
+```
+
+---
+
+### Step 1 — Clear the working tree (this is the `git checkout` error you hit)
+
+If a `git checkout` failed with *"Your local changes to the following files would be overwritten…
+`prisma/schema.prisma`"*, that is Git protecting un-saved edits — **not** data loss, and **not** a
+problem with the recovery. The recovery script refuses to run on a dirty tree, so you must clear it
+first. Because the script **rebuilds the schema from scratch anyway**, nothing in your working tree
+is needed by the recovery — you are only deciding what to keep for your own records.
+
+```bash
+git status                       # see exactly what is dirty
+
+# Recommended — tuck the edits away safely (you can get them back with `git stash pop`):
+git stash push -m "pre-recovery local drift"
+
+# OR, if you are certain the local edits are throwaway (e.g. `prisma format` noise),
+# discard just that file instead:
+#   git restore prisma/schema.prisma
+```
+
+You do **not** need to be on any particular branch — the script creates its own branch off
+`upstream/main` regardless of where you are. A clean working tree is the only requirement.
+Confirm it is clean:
+
+```bash
+git status                       # should report "nothing to commit, working tree clean"
+```
+
+---
+
+### Step 2 — Take a Neon restore point (browser — do this BEFORE anything deploys)
+
+Open the **Neon dashboard** and create a restore point (or a Neon branch) of the production
+database. This is the one irreplaceable safety net: the Netlify build runs `prisma migrate deploy`
+*at build time*, which can change the live schema irreversibly. Reverting code does **not** undo an
+applied migration — only the Neon restore point does. (Nothing is deployed yet; you are just arming
+the safety net now so it exists before Step 6.)
+
+---
+
+### Step 3 — Preview what the script will do (optional, recommended)
+
+Neither of these changes anything — they just show you the plan.
+
+```bash
+# List the files the script classifies as Tier A / B / C:
+bash scripts/disaster-recovery/restore-customizations.sh --discover
+
+# Walk the full run without writing anything:
+bash scripts/disaster-recovery/restore-customizations.sh --dry-run
+```
+
+---
+
+### Step 4 — Run the recovery script  ← the step you had not reached yet
+
+```bash
+bash scripts/disaster-recovery/restore-customizations.sh --into "resync/upstream-$(date +%Y%m%d)"
+```
+
+This creates a new branch off `upstream/main`, overlays your Tier A files verbatim, overlays the
+Tier B Blobs/Neon files (flagging each `[review]`), surgically merges the `package.json` build
+script and your custom schema columns, and stages everything. **It does not build or deploy.**
+When it finishes, note the branch name it created:
+
+```bash
+git branch --show-current        # e.g. resync/upstream-20260621
+```
+
+---
+
+### Step 5 — Reconcile the schema and the flagged files (no DB needed)
+
+```bash
+npx prisma format                # parses + tidies the schema file (no DB connection)
+npx prisma validate              # confirms the schema is valid   (no DB connection)
+```
+
+Then review every file the script flagged `[review]` (the Tier B overlays) against upstream — those
+are the only places where upstream may have improved a file you overwrote:
+
+```bash
+git diff --stat                  # overview of everything staged
+# For each flagged file, compare your version to upstream's, e.g.:
+#   git diff upstream/main -- lib/prisma.ts
+```
+
+---
+
+### Step 6 — Set the environment variables on the Netlify site (browser)
+
+In the Netlify dashboard, set the variables catalogued in **§6**. The critical one is the database
+URL: **point `DATABASE_URL` (and/or `NETLIFY_DATABASE_URL*`) at the SAME Neon database.** Reusing
+the same database means all your data **and** your `nxtc__…` Lambda API tokens survive untouched
+(see §1). Never commit any values to the repo — names only.
+
+---
+
+### Step 7 — Commit the recovered code
+
+```bash
+git add -A
+git commit -m "Disaster recovery: resync upstream and re-apply customizations"
+```
+
+---
+
+### Step 8 — Push to GitHub and let Netlify build a deploy preview
+
+```bash
+# Push the recovery branch (use the name from Step 4):
+git push -u origin "$(git branch --show-current)"
+```
+
+Netlify builds a deploy preview for the branch. **This is the only place migrations run:** the build
+executes `prisma generate → prisma migrate deploy → next build` against the Neon database your env
+vars point at — which is exactly why you need no local database. Make sure your Step 2 Neon restore
+point exists before this push whenever `prisma/migrations/` changed.
+
+> **Team-flow note:** this project promotes work via `dev → main` (see §4 of AGENTS.md). If you want
+> the recovery to ride the standard `dev` deploy instead of a per-branch preview, bring the recovery
+> branch onto `dev` (`git checkout dev && git merge <recovery-branch>`), resolve any conflicts in
+> favour of the recovery branch, then `git push origin dev`. Either way, **never force-push `dev` or
+> `main`.**
+
+---
+
+### Step 9 — Verify on the deployed preview, then promote to production
+
+1. On the deployed preview URL, smoke-test the integration surface: the Lambda intake endpoints
+   in **§7** (`/api/crm/targets/ingest`, `/api/crm/contacts/ingest`), the authenticated file route,
+   and login. Verify against the **deployed** environment — you have no local DB by design.
+2. Once the preview is green **and** a fresh Neon restore point exists, open the release PR:
+
+```bash
+gh pr create --base main --head dev --title "release: disaster-recovery resync" \
+  --body "Resynced from upstream and re-applied the verified custom delta (see 2026_disaster_recovery_nextcrm.md)."
+```
+
+(If you deployed the recovery branch directly rather than via `dev`, use `--head <recovery-branch>`.)
+
+---
+
+### Rollback — free until you deploy, deliberate afterward
+
+- **Before Step 8 (nothing deployed):** the recovery branch is disposable. `git checkout main`
+  (and `git stash pop` if you stashed in Step 1) returns you to where you started. Nothing is
+  irreversible.
+- **After a deploy that ran migrations:** code revert alone is **not** enough. You must **restore the
+  Neon restore point from Step 2 AND publish the last known-good Netlify deploy.** This is the whole
+  reason Step 2 is non-negotiable.
+
+---
+
+### The whole runbook at a glance
+
+| # | Do | Command / place | Touches DB? |
+| - | --- | --- | --- |
+| 0 | Confirm remotes | `git remote -v` / `git remote add upstream …` | no |
+| 1 | Clean working tree | `git stash push -m …` (the checkout-error fix) | no |
+| 2 | Neon restore point | Neon dashboard | **yes (safety net)** |
+| 3 | Preview (optional) | `…restore-customizations.sh --discover / --dry-run` | no |
+| 4 | **Run the script** | `…restore-customizations.sh --into resync/upstream-$(date +%Y%m%d)` | no |
+| 5 | Reconcile schema | `npx prisma format && npx prisma validate` | no |
+| 6 | Set env vars | Netlify dashboard (point `DATABASE_URL` at same Neon) | no |
+| 7 | Commit | `git add -A && git commit -m …` | no |
+| 8 | Push → preview | `git push -u origin <recovery-branch>` (Netlify builds; migrations run here) | **yes (at build)** |
+| 9 | Verify + promote | test preview, then `gh pr create --base main --head dev` | no |
