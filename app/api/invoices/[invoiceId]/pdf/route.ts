@@ -1,49 +1,49 @@
+/**
+ * Invoice PDF download route — fetches PDFs from Netlify Blobs.
+ *
+ * Previously redirected to a MinIO presigned URL. Now reads the PDF directly
+ * from Netlify Blobs via lib/storage.ts and returns it inline.
+ */
 import { NextRequest, NextResponse } from "next/server";
-import {
-  requireAuthenticated,
-  unauthorizedResponse,
-  notFoundOrForbiddenResponse,
-  AuthenticationError,
-} from "@/lib/authz";
+import { getSession } from "@/lib/auth-server";
 import { prismadb } from "@/lib/prisma";
-import { canReadInvoice, type InvoiceStatus } from "@/lib/invoices/permissions";
-import { getInvoicePdfPresignedUrl } from "@/lib/invoices/storage";
+import { storageGet } from "@/lib/storage";
 
 export async function GET(
   _request: NextRequest,
   { params }: { params: Promise<{ invoiceId: string }> }
 ) {
   const { invoiceId } = await params;
-  let user;
-  try {
-    user = await requireAuthenticated();
-  } catch (e) {
-    if (e instanceof AuthenticationError) return unauthorizedResponse();
-    throw e;
+  const session = await getSession();
+  if (!session) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const invoice = await prismadb.invoices.findUnique({
     where: { id: invoiceId },
-    select: { createdBy: true, status: true, pdfStorageKey: true },
+    select: { pdfStorageKey: true },
   });
-  if (!invoice) return notFoundOrForbiddenResponse();
 
-  if (
-    !canReadInvoice(
-      { status: invoice.status as InvoiceStatus, createdBy: invoice.createdBy },
-      { id: user.id, role: user.role },
-    )
-  ) {
-    return notFoundOrForbiddenResponse();
+  if (!invoice) {
+    return NextResponse.json({ error: "Invoice not found" }, { status: 404 });
   }
 
   if (!invoice.pdfStorageKey) {
     return NextResponse.json(
       { error: "PDF not yet generated. Issue the invoice first." },
-      { status: 404 },
+      { status: 404 }
     );
   }
 
-  const url = await getInvoicePdfPresignedUrl(invoice.pdfStorageKey);
-  return NextResponse.redirect(url);
+  const data = await storageGet(invoice.pdfStorageKey);
+  if (!data) {
+    return NextResponse.json({ error: "PDF file not found in storage" }, { status: 404 });
+  }
+
+  return new NextResponse(data, {
+    headers: {
+      "Content-Type": "application/pdf",
+      "Content-Disposition": `inline; filename="${invoiceId}.pdf"`,
+    },
+  });
 }

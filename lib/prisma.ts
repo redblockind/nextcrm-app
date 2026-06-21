@@ -8,7 +8,11 @@ declare global {
 
 // Prisma Client configuration with connection pooling and lifecycle management
 const prismaClientSingleton = () => {
-  const connectionString = `${process.env.DATABASE_URL}`;
+  const connectionString =
+    process.env.DATABASE_URL ??
+    process.env.NETLIFY_DATABASE_URL ??
+    process.env.NETLIFY_DATABASE_URL_UNPOOLED ??
+    "";
   const pool = new Pool({ connectionString });
   const adapter = new PrismaPg(pool);
 

@@ -1,5 +1,15 @@
+/**
+ * Bulk document upload dialog with duplicate detection.
+ *
+ * Files are uploaded as FormData to /api/upload/presigned-url, which stores them
+ * in Netlify Blobs. The "presigned-url" route name is a historical artifact
+ * from when this app used MinIO — it now accepts direct uploads rather than
+ * returning presigned S3 URLs.
+ *
+ * @see lib/storage.ts — Netlify Blobs storage abstraction
+ * @see app/api/upload/presigned-url/route.ts — server-side upload handler
+ */
 "use client";
-
 import { useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { useDropzone } from "react-dropzone";
@@ -81,27 +91,17 @@ export function BulkUploadModal({ accountId }: BulkUploadModalProps) {
 
     try {
       const folder = item.file.type.startsWith("image/") ? "images" : "documents";
+      const formData = new FormData();
+      formData.append("file", item.file);
+      formData.append("folder", folder);
+
       const res = await fetch("/api/upload/presigned-url", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          filename: item.file.name,
-          contentType: item.file.type,
-          folder,
-        }),
+        body: formData,
       });
 
-      if (!res.ok) throw new Error("Failed to get presigned URL");
-      const { presignedUrl, fileUrl, key } = await res.json();
-
-      updateFile(index, { progress: 30 });
-
-      const uploadRes = await fetch(presignedUrl, {
-        method: "PUT",
-        body: item.file,
-        headers: { "Content-Type": item.file.type },
-      });
-      if (!uploadRes.ok) throw new Error(`Upload failed: ${uploadRes.status}`);
+      if (!res.ok) throw new Error("Upload failed");
+      const { fileUrl, key } = await res.json();
 
       updateFile(index, { progress: 70 });
 

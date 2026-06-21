@@ -1,3 +1,10 @@
+/**
+ * Enriches an uploaded document: extracts text, generates embeddings,
+ * produces an AI summary, and classifies the document type.
+ *
+ * File content is fetched from Netlify Blobs via lib/storage.ts.
+ * Previously fetched directly from MinIO using S3 GetObjectCommand.
+ */
 import { inngest } from "@/inngest/client";
 import { prismadb } from "@/lib/prisma";
 import {
@@ -5,25 +12,25 @@ import {
   toVectorLiteral,
   computeContentHash,
 } from "@/inngest/lib/embedding-utils";
-import { GetObjectCommand } from "@aws-sdk/client-s3";
-import { minioClient, MINIO_BUCKET } from "@/lib/minio";
+import { storageGet } from "@/lib/storage";
 import OpenAI from "openai";
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+let openaiClient: OpenAI | null = null;
+function getOpenAI(): OpenAI {
+  if (!openaiClient) {
+    openaiClient = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  }
+  return openaiClient;
+}
 
 const CHUNK_SIZE = 512; // tokens (approx 4 chars per token)
 const CHUNK_OVERLAP = 50;
 const MAX_SINGLE_EMBED_CHARS = 8000 * 4; // ~8000 tokens
 
 async function fetchFileBuffer(key: string): Promise<Buffer> {
-  const response = await minioClient.send(
-    new GetObjectCommand({ Bucket: MINIO_BUCKET, Key: key })
-  );
-  const chunks: Uint8Array[] = [];
-  for await (const chunk of response.Body as AsyncIterable<Uint8Array>) {
-    chunks.push(chunk);
-  }
-  return Buffer.concat(chunks);
+  const data = await storageGet(key);
+  if (!data) throw new Error(`File not found: ${key}`);
+  return Buffer.from(data);
 }
 
 async function extractText(buffer: Buffer, mimeType: string): Promise<string | null> {
@@ -171,7 +178,7 @@ export const enrichDocument = inngest.createFunction(
     // Step 3: Generate summary
     const summary = await step.run("generate-summary", async () => {
       const truncated = contentText.slice(0, 12000); // ~3000 tokens for summary input
-      const response = await openai.chat.completions.create({
+      const response = await getOpenAI().chat.completions.create({
         model: "gpt-4o-mini",
         messages: [
           {
@@ -194,7 +201,7 @@ export const enrichDocument = inngest.createFunction(
     // Step 4: AI classification
     await step.run("ai-classify", async () => {
       const truncated = contentText.slice(0, 4000);
-      const response = await openai.chat.completions.create({
+      const response = await getOpenAI().chat.completions.create({
         model: "gpt-4o-mini",
         messages: [
           {
