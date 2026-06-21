@@ -225,6 +225,9 @@ const CRMKanban = ({
       serverDataRef.current = data;
       setColumns(initColumns(data, salesStages));
     }
+    // Intentionally syncs only on `data` changes; salesStages is stable for the
+    // component's lifetime and including it would re-sync columns unnecessarily.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data]);
 
   const sensors = useSensors(
