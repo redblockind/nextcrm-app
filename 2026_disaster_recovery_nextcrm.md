@@ -91,6 +91,7 @@ upstream may have improved these files since the swap was written.
 
 | File | Why it's ours |
 | --- | --- |
+| `prisma.config.ts` | Same Neon wiring as `lib/prisma.ts` but for the Prisma **CLI**: the `DATABASE_URL → NETLIFY_DATABASE_URL_UNPOOLED → NETLIFY_DATABASE_URL` fallback (defaulting to `""`) plus `import "dotenv/config"`. Prisma 7 no longer auto-loads `.env` and upstream's config calls the strict `env("DATABASE_URL")` helper, which **throws `PrismaConfigEnvError` whenever `DATABASE_URL` is unset** (e.g. running `npx prisma format` locally). Ours degrades gracefully instead. |
 | `lib/prisma.ts` | Adds the `DATABASE_URL → NETLIFY_DATABASE_URL → NETLIFY_DATABASE_URL_UNPOOLED` fallback chain. This *is* "the routine that connects to my Neon DB." Upstream reads only `DATABASE_URL`. |
 | `lib/minio.ts` | Neutralized legacy shim. |
 | `lib/invoices/storage.ts` | Invoice file storage routed through Blobs. |

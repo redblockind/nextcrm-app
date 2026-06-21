@@ -62,6 +62,7 @@ DISCOVER_ONLY=0
 # connection wiring. They are the only shared files where "fork wins". Audit
 # this list with --discover; see the recovery doc for why each is here.
 CUSTOM_SHARED_FILES=(
+  "prisma.config.ts"                                              # Neon URL fallback + dotenv (Prisma 7)
   "lib/prisma.ts"                                                  # Neon URL fallback chain
   "lib/minio.ts"                                                   # neutralized legacy shim
   "lib/invoices/storage.ts"                                        # invoice storage on Blobs
