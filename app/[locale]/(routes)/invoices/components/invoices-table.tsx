@@ -60,6 +60,32 @@ function formatCurrency(amount: string, currency: string, locale: string) {
   }).format(num);
 }
 
+function SortHeader({
+  field,
+  children,
+  sortField,
+  sortDir,
+  onToggle,
+}: {
+  field: SortField;
+  children: React.ReactNode;
+  sortField: SortField;
+  sortDir: SortDir;
+  onToggle: (field: SortField) => void;
+}) {
+  return (
+    <TableHead
+      className="cursor-pointer select-none"
+      onClick={() => onToggle(field)}
+    >
+      {children}
+      {sortField === field && (
+        <span className="ml-1">{sortDir === "asc" ? "↑" : "↓"}</span>
+      )}
+    </TableHead>
+  );
+}
+
 export function InvoicesTable({
   invoices,
   statusLabels,
@@ -118,22 +144,15 @@ export function InvoicesTable({
     return false;
   };
 
-  const SortHeader = ({
-    field,
-    children,
-  }: {
-    field: SortField;
-    children: React.ReactNode;
-  }) => (
-    <TableHead
-      className="cursor-pointer select-none"
-      onClick={() => toggleSort(field)}
+  const SortHeaderCell = (field: SortField, label: React.ReactNode) => (
+    <SortHeader
+      field={field}
+      sortField={sortField}
+      sortDir={sortDir}
+      onToggle={toggleSort}
     >
-      {children}
-      {sortField === field && (
-        <span className="ml-1">{sortDir === "asc" ? "\u2191" : "\u2193"}</span>
-      )}
-    </TableHead>
+      {label}
+    </SortHeader>
   );
 
   const labels = tableLabels ?? {};
@@ -142,16 +161,12 @@ export function InvoicesTable({
     <Table>
       <TableHeader>
         <TableRow>
-          <SortHeader field="number">{labels.number ?? "Number"}</SortHeader>
-          <SortHeader field="account">{labels.account ?? "Account"}</SortHeader>
-          <SortHeader field="issueDate">
-            {labels.issueDate ?? "Issued"}
-          </SortHeader>
-          <SortHeader field="dueDate">{labels.dueDate ?? "Due"}</SortHeader>
-          <SortHeader field="grandTotal">
-            {labels.total ?? "Total"}
-          </SortHeader>
-          <SortHeader field="status">{labels.status ?? "Status"}</SortHeader>
+          {SortHeaderCell("number", labels.number ?? "Number")}
+          {SortHeaderCell("account", labels.account ?? "Account")}
+          {SortHeaderCell("issueDate", labels.issueDate ?? "Issued")}
+          {SortHeaderCell("dueDate", labels.dueDate ?? "Due")}
+          {SortHeaderCell("grandTotal", labels.total ?? "Total")}
+          {SortHeaderCell("status", labels.status ?? "Status")}
         </TableRow>
       </TableHeader>
       <TableBody>
