@@ -18,7 +18,7 @@ const Footer = async () => {
       <div className="hidden md:flex space-x-2 pr-2">
         powered by Next.js
         <span className="bg-black dark:bg-white rounded-md text-white dark:text-black px-1 mx-1">
-          {nextVersion.substring(1, 7) || process.env.NEXT_PUBLIC_NEXT_VERSION}
+          {nextVersion?.substring(1, 7) || process.env.NEXT_PUBLIC_NEXT_VERSION}
         </span>
         +
         <Link href={"https://ui.shadcn.com/"}>
