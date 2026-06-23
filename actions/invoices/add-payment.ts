@@ -20,7 +20,7 @@ export async function addPayment(raw: unknown) {
     if (
       !canAddPayment(
         { status: invoice.status as InvoiceStatus, createdBy: invoice.createdBy },
-        { id: user.id, isAdmin: user.is_admin }
+        { id: user.id, isAdmin: user.role === "admin" }
       )
     ) {
       throw new Error("Cannot add payment to this invoice");

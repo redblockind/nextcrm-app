@@ -42,7 +42,7 @@ export async function sendInvoiceEmail(input: SendInvoiceEmailInput) {
     },
   });
 
-  if (invoice.createdBy !== user.id && !user.is_admin) {
+  if (invoice.createdBy !== user.id && user.role !== "admin") {
     throw new Error("Forbidden");
   }
 

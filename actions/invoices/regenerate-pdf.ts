@@ -34,7 +34,7 @@ export async function regenerateInvoicePdf(
     });
 
     // Permission: admin OR the creator of the invoice
-    if (!user.is_admin && invoice.createdBy !== user.id) {
+    if (user.role !== "admin" && invoice.createdBy !== user.id) {
       return { ok: false, error: "Forbidden" };
     }
 

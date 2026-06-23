@@ -5,7 +5,7 @@ import { prismadb } from "@/lib/prisma";
 export async function GET() {
   try {
     const user = await getUser();
-    if (!user.is_admin) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    if (user.role !== "admin") return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   } catch {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -20,7 +20,7 @@ export async function GET() {
 export async function POST(request: NextRequest) {
   try {
     const user = await getUser();
-    if (!user.is_admin) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    if (user.role !== "admin") return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   } catch {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }

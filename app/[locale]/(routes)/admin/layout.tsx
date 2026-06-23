@@ -13,7 +13,7 @@ export default async function AdminLayout({
   } catch {
     redirect("/sign-in");
   }
-  if (!user.is_admin) redirect("/");
+  if (user.role !== "admin") redirect("/");
 
   return (
     <div className="flex h-full w-full min-h-0">

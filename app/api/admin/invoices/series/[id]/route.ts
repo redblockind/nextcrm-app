@@ -9,7 +9,7 @@ export async function PATCH(
   const { id } = await params;
   try {
     const user = await getUser();
-    if (!user.is_admin) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    if (user.role !== "admin") return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   } catch {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -36,7 +36,7 @@ export async function DELETE(
   const { id } = await params;
   try {
     const user = await getUser();
-    if (!user.is_admin) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    if (user.role !== "admin") return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   } catch {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }

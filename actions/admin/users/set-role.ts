@@ -3,7 +3,7 @@ import { getSession } from "@/lib/auth-server";
 import { prismadb } from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
 
-const VALID_ROLES = ["admin", "member", "viewer"] as const;
+const VALID_ROLES = ["user", "manager", "admin"] as const;
 type Role = (typeof VALID_ROLES)[number];
 
 export const setUserRole = async (userId: string, role: Role) => {
