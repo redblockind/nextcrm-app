@@ -18,12 +18,12 @@ const nextConfig = {
   async redirects() {
     return [
       {
-        source: "/:locale/crm/targets/:path*",
+        source: "/:locale(en|cz|de|uk)/crm/targets/:path*",
         destination: "/:locale/campaigns/targets/:path*",
         permanent: true,
       },
       {
-        source: "/:locale/crm/target-lists/:path*",
+        source: "/:locale(en|cz|de|uk)/crm/target-lists/:path*",
         destination: "/:locale/campaigns/target-lists/:path*",
         permanent: true,
       },

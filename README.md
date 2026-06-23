@@ -195,7 +195,7 @@ Global search across all CRM entities from a single search bar — grouped resul
 
 - [PostgreSQL 17+](https://www.postgresql.org/) – Powerful open-source relational database with **pgvector** extension for AI embeddings
 - [Resend](https://resend.com/) – A powerful email framework for streamlined email development together with [react.email](https://react.email)
-- [UploadThing](https://uploadthing.com/) + S3-compatible storage (DigitalOcean Spaces) – for document file storage
+- [UploadThing](https://uploadthing.com/) + [Netlify Blobs](https://docs.netlify.com/blobs/overview/) — for document file storage (Netlify deployment uses Blobs; Docker self-hosting uses MinIO)
 - [Inngest](https://www.inngest.com/) – Background job queue for async embedding and AI workflows
 
 ### AI & MCP
@@ -303,7 +303,7 @@ Available soon at: http://docs.nextcrm.io
    **.env.local**
 
    > > - BETTER_AUTH_SECRET - for auth
-   > > - uploadthings - for storing files
+   > > - File storage: Netlify deployment uses Netlify Blobs (no config needed); Docker uses MinIO (see .env.docker)
    > > - openAI - for embeddings and project management assistant *(optional — can be set via admin panel instead)*
    > > - Firecrawl - for contact/target enrichment *(optional — can be set via admin panel instead)*
    > > - SMTP and IMAP for emails
@@ -360,6 +360,8 @@ Open [http://localhost:3000](http://localhost:3000) — the app is ready, the sc
 | `postgres` | PostgreSQL 17 with pgvector | internal only |
 | `minio` | S3-compatible object storage | internal only |
 | `inngest` | Background job runner | internal only |
+
+> **Storage note:** The Docker setup uses MinIO for file storage. The Netlify deployment uses [Netlify Blobs](https://docs.netlify.com/blobs/overview/) instead — a platform-native object store that requires no configuration. The storage abstraction layer (`lib/storage.ts`) handles this transparently; see `lib/minio.ts` for the legacy MinIO client (retained for Docker reference only).
 
 Only port `3000` is exposed to the host. Everything else stays on the internal Docker network — secure by default. Uncomment the relevant `ports:` blocks in `docker-compose.yml` if you need direct access (e.g. for psql or the MinIO console).
 

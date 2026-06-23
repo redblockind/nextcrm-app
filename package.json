@@ -3,7 +3,7 @@
   "version": "0.12.3",
   "private": true,
   "engines": {
-    "node": ">=22.12.0",
+    "node": ">=20.0.0",
     "pnpm": ">=9.0.0"
   },
   "scripts": {
@@ -33,6 +33,7 @@
     "@hookform/resolvers": "^5.2.2",
     "@mendable/firecrawl-js": "^1.29.3",
     "@modelcontextprotocol/sdk": "^1.26.0",
+    "@netlify/blobs": "^10.7.8",
     "@openai/agents": "^0.8.0",
     "@prisma/adapter-pg": "7.6.0",
     "@prisma/client": "7.6.0",

@@ -57,6 +57,9 @@ const AddTargetToListModal = ({
         toast.error("Failed to load targets");
       })
       .finally(() => setIsFetching(false));
+    // Re-fetches only when the modal opens; existingTargetIds is read at fetch
+    // time and does not need to retrigger the effect.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   const filtered = targets.filter((t) => {

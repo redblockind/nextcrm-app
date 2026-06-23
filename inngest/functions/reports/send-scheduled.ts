@@ -13,7 +13,11 @@ import { getReportScope } from "@/lib/authz/scopes/report-scope";
 import type { ReportScope } from "@/lib/authz/scopes/report-scope";
 import { mapLegacyRole } from "@/lib/authz/roles";
 
-const resend = new Resend(process.env.RESEND_API_KEY);
+let _resend: Resend | null = null;
+function getResend(): Resend {
+  if (!_resend) _resend = new Resend(process.env.RESEND_API_KEY);
+  return _resend;
+}
 
 export async function getReportData(category: string, filters: any, scope: ReportScope) {
   switch (category) {
@@ -94,7 +98,7 @@ export const reportSendScheduled = inngest.createFunction(
           attachments.push({ filename: `${schedule.reportConfig.category}-report.pdf`, content: pdfBuffer });
         }
 
-        await resend.emails.send({
+        await getResend().emails.send({
           from: process.env.RESEND_FROM_EMAIL!,
           to: schedule.recipients as string[],
           subject: `Report: ${schedule.reportConfig.name}`,

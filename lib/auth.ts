@@ -118,7 +118,12 @@ export const auth = betterAuth({
         // Notify admins about new pending user
         const dbUser = await prismadb.users.findUnique({ where: { id: user.id } });
         if (dbUser) {
-          await newUserNotify(dbUser);
+          try {
+            await newUserNotify(dbUser);
+          } catch (error) {
+            console.error("Failed to notify admin about new user:", error);
+            // Don't fail user creation if email notification fails
+          }
         }
       }
     },

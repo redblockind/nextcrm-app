@@ -2,7 +2,6 @@
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Link from "@tiptap/extension-link";
-import Underline from "@tiptap/extension-underline";
 import {
   Bold,
   Italic,
@@ -22,8 +21,7 @@ type Props = {
 export function TipTapEditor({ content, onChange }: Props) {
   const editor = useEditor({
     extensions: [
-      StarterKit,
-      Underline,
+      StarterKit.configure({ link: false }),
       Link.configure({ openOnClick: false }),
     ],
     content: content ?? "",

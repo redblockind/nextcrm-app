@@ -6,12 +6,24 @@ const AUTH_TAG_BYTES = 16;
 
 function getKey(): Buffer {
   const raw = process.env.EMAIL_ENCRYPTION_KEY;
-  if (!raw || !/^[0-9a-fA-F]{64}$/.test(raw)) {
+  if (!raw) {
     throw new Error(
-      "EMAIL_ENCRYPTION_KEY must be set to a 64-character hex string (32 bytes). Generate with: openssl rand -hex 32"
+      "EMAIL_ENCRYPTION_KEY must be set to a 32-byte key, encoded as either a 64-character hex string or a base64 string. Generate with: openssl rand -hex 32 (or: openssl rand -base64 32)"
     );
   }
-  return Buffer.from(raw, "hex");
+
+  if (/^[0-9a-fA-F]{64}$/.test(raw)) {
+    return Buffer.from(raw, "hex");
+  }
+
+  if (/^[A-Za-z0-9+/]+={0,2}$/.test(raw)) {
+    const decoded = Buffer.from(raw, "base64");
+    if (decoded.length === 32) return decoded;
+  }
+
+  throw new Error(
+    "EMAIL_ENCRYPTION_KEY must decode to 32 bytes. Provide either a 64-character hex string or a base64 string of 32 bytes. Generate with: openssl rand -hex 32 (or: openssl rand -base64 32)"
+  );
 }
 
 /**

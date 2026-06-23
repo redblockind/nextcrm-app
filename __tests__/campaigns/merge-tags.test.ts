@@ -30,4 +30,11 @@ describe("resolveMergeTags", () => {
     const html = "{{first_name}} {{company}}";
     expect(resolveMergeTags(html, { last_name: "Smith" })).toBe(" ");
   });
+
+  it("replaces merge tags with spaces inside braces", () => {
+    const html = "<p>Hi {{ first_name }} {{ last_name }}, from {{ company }}</p>";
+    expect(resolveMergeTags(html, target)).toBe(
+      "<p>Hi John Smith, from Acme Inc</p>"
+    );
+  });
 });

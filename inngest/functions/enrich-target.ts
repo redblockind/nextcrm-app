@@ -31,6 +31,7 @@ export const enrichTarget = inngest.createFunction(
   {
     id: "enrich-target",
     name: "Enrich Target",
+    concurrency: { limit: 2 }, // Respect Anthropic's rate limits
     triggers: [{ event: "enrich/target.run" }],
     retries: 3,
   },
@@ -122,19 +123,25 @@ export const enrichTarget = inngest.createFunction(
 
       try {
         await sandbox.files.write("/home/user/agent.mjs", script);
+
         let result: { exitCode: number; stdout: string; stderr: string };
         try {
-          result = await sandbox.commands.run("node /home/user/agent.mjs", {
-            timeoutMs: 0, // no per-request timeout; sandbox-level timeout handles the limit
-            envs: {
-              ANTHROPIC_API_KEY: anthropicKey,
-              COMPANY_NAME: target.company ?? "",
-              COMPANY_WEBSITE: target.company_website ?? "",
-              TARGET_EMAIL: target.email ?? "",
-              TARGET_NAME: [target.first_name, target.last_name].filter(Boolean).join(" "),
-              KNOWN_DOMAIN: knownDomain ?? "",
-            },
-          });
+          // Install SDK and run agent in single command so installation persists
+          // Suppress npm output to stderr so agent JSON comes through on stdout
+          result = await sandbox.commands.run(
+            "npm install @anthropic-ai/sdk >/dev/null 2>&1 && node /home/user/agent.mjs",
+            {
+              timeoutMs: 0, // no per-request timeout; sandbox-level timeout handles the limit
+              envs: {
+                ANTHROPIC_API_KEY: anthropicKey,
+                COMPANY_NAME: target.company ?? "",
+                COMPANY_WEBSITE: target.company_website ?? "",
+                TARGET_EMAIL: target.email ?? "",
+                TARGET_NAME: [target.first_name, target.last_name].filter(Boolean).join(" "),
+                KNOWN_DOMAIN: knownDomain ?? "",
+              },
+            }
+          );
         } catch (cmdErr: unknown) {
           const e = cmdErr as Record<string, unknown>;
           throw new Error(`Agent failed: ${e["stderr"] ?? e["stdout"] ?? String(cmdErr)}`);

@@ -27,6 +27,16 @@ export const updateTarget = async (data: {
   employees?: string;
   description?: string;
   status?: boolean;
+  stripe_customer_id?: string;
+  contact_origin?: string;
+  is_b2b?: boolean;
+  first_order_date?: string;
+  last_order_date?: string;
+  last_order_id?: string;
+  cumulative_order_count?: string;
+  opt_in_time?: string;
+  b2b_discount_percent?: string;
+  is_temporary?: boolean;
 }) => {
   const session = await getSession();
   if (!session) return { error: "Unauthorized" };

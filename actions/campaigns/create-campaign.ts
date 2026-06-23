@@ -12,6 +12,7 @@ type StepInput = {
   order: number;
   template_id: string;
   subject: string;
+  content_html?: string;
   delay_days: number;
   send_to: "all" | "non_openers";
 };

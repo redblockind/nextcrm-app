@@ -18,6 +18,10 @@ import { campaignScheduleSend } from "@/inngest/functions/campaigns/schedule-sen
 import { campaignSendStep } from "@/inngest/functions/campaigns/send-step";
 import { campaignProcessFollowUp } from "@/inngest/functions/campaigns/process-follow-up";
 import { campaignSendNow } from "@/inngest/functions/campaigns/send-now";
+// Post-purchase daily batch cron is intentionally DISABLED (unregistered below).
+// The post-purchase email scheduling now lives in Listmonk. The function file is
+// left in place but is no longer served, so its `0 9 * * *` cron never fires.
+// import { postPurchaseBatchCron } from "@/inngest/functions/campaigns/post-purchase-batch";
 import { reportSendScheduled } from "@/inngest/functions/reports/send-scheduled";
 import { enrichDocument } from "@/inngest/functions/documents/enrich-document";
 import { generateDocumentThumbnail } from "@/inngest/functions/documents/generate-thumbnail";
@@ -44,6 +48,7 @@ export const { GET, POST, PUT } = serve({
     campaignSendStep,
     campaignProcessFollowUp,
     campaignSendNow,
+    // postPurchaseBatchCron,  // DISABLED — post-purchase scheduling moved to Listmonk
     reportSendScheduled,
     enrichDocument,
     generateDocumentThumbnail,
