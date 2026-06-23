@@ -16,7 +16,7 @@ export async function cancelInvoice(invoiceId: string) {
   if (
     !canCancelInvoice(
       { status: invoice.status as InvoiceStatus, createdBy: invoice.createdBy },
-      { id: user.id, isAdmin: user.is_admin }
+      { id: user.id, isAdmin: user.role === "admin" }
     )
   ) {
     throw new Error("Cannot cancel this invoice");

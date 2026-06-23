@@ -29,7 +29,7 @@ export async function issueInvoice(raw: unknown) {
   if (
     !canIssueInvoice(
       { status: invoice.status as InvoiceStatus, createdBy: invoice.createdBy },
-      { id: user.id, isAdmin: user.is_admin }
+      { id: user.id, isAdmin: user.role === "admin" }
     )
   ) {
     throw new Error("Cannot issue this invoice");

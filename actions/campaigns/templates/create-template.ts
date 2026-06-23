@@ -1,6 +1,6 @@
 "use server";
-import { getSession } from "@/lib/auth-server";
 import { prismadb } from "@/lib/prisma";
+import { requireAuthenticated, AuthenticationError } from "@/lib/authz";
 
 export const createTemplate = async (data: {
   name: string;
@@ -8,10 +8,17 @@ export const createTemplate = async (data: {
   subject_default?: string;
   content_html: string;
   content_json: object;
-}): Promise<{ id: string }> => {
-  const session = await getSession();
+}): Promise<{ id: string } | { error: string }> => {
+  let user;
+  try {
+    user = await requireAuthenticated();
+  } catch (e) {
+    if (e instanceof AuthenticationError) return { error: "Unauthorized" };
+    throw e;
+  }
+
   const created = await prismadb.crm_campaign_templates.create({
-    data: { ...data, created_by: session?.user?.id ?? null },
+    data: { ...data, created_by: user.id },
     select: { id: true },
   });
   return { id: created.id };

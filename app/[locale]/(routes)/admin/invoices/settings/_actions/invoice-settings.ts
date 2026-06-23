@@ -69,7 +69,7 @@ export async function saveInvoiceSettings(
   } catch {
     return { ok: false, error: "Unauthorized" };
   }
-  if (!user.is_admin) return { ok: false, error: "Forbidden" };
+  if (user.role !== "admin") return { ok: false, error: "Forbidden" };
 
   const parsed = settingsSchema.safeParse(input);
   if (!parsed.success) {

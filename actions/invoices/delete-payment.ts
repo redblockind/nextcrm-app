@@ -7,7 +7,7 @@ import { Decimal } from "decimal.js";
 export async function deletePayment(paymentId: string) {
   const user = await getUser();
 
-  if (!user.is_admin) {
+  if (user.role !== "admin") {
     throw new Error("Only admins can delete payments");
   }
 

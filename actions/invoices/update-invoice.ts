@@ -20,7 +20,7 @@ export async function updateInvoice(invoiceId: string, raw: unknown) {
   if (
     !canEditInvoice(
       { status: existing.status as InvoiceStatus, createdBy: existing.createdBy },
-      { id: user.id, isAdmin: user.is_admin }
+      { id: user.id, isAdmin: user.role === "admin" }
     )
   ) {
     throw new Error("Cannot edit this invoice");
