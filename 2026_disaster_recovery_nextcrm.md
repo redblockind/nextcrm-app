@@ -437,9 +437,56 @@ point exists before this push whenever `prisma/migrations/` changed.
 
 > **Team-flow note:** this project promotes work via `dev → main` (see §4 of AGENTS.md). If you want
 > the recovery to ride the standard `dev` deploy instead of a per-branch preview, bring the recovery
-> branch onto `dev` (`git checkout dev && git merge <recovery-branch>`), resolve any conflicts in
-> favour of the recovery branch, then `git push origin dev`. Either way, **never force-push `dev` or
-> `main`.**
+> branch onto `dev` (`git checkout dev && git merge <recovery-branch>`), resolve any conflicts
+> **file-by-file as described in Step 8b** (not with a blanket take-one-side rule), then
+> `git push origin dev`. Either way, **never force-push `dev` or `main`.**
+
+---
+
+### Step 8b — Resolve conflicts on the release PR (expected, not a failure)
+
+When you open the `dev → main` release PR in Step 9 — or merge the recovery branch onto `dev`
+in the team-flow note above — GitHub may report conflicts. **This is a predictable consequence
+of how the recovery branch is built, not a sign anything went wrong.** Because the branch starts
+fresh off `upstream/main` and re-applies only your small delta (§2, §3), most files are upstream's
+verbatim and cannot conflict. Conflicts surface **only in the few genuinely shared files both
+branches edited differently** — in practice `prisma/schema.prisma`, `pnpm-lock.yaml`, and any
+`actions/…` files touched on both sides.
+
+Resolve them **file-by-file — never with a blanket "take one side" rule**, which can silently
+drop real work (e.g. a column `main` added, or the authorization a PR layered on):
+
+- **`prisma/schema.prisma`** — keep whichever side carries the real change on a per-field basis.
+  Do **not** discard a column one branch added just because the other branch reorganized the
+  surrounding block. After editing, **normalize and validate** before committing — this is the
+  check the web editor cannot do for you:
+
+  ```bash
+  npx prisma format
+  npx prisma validate          # flags any field/@@index left referencing a dropped column
+  ```
+
+- **`pnpm-lock.yaml`** — **never hand-merge a lockfile.** `package.json` itself merges cleanly,
+  so clear the markers by taking either side and then **regenerate** the lockfile from the merged
+  manifest:
+
+  ```bash
+  git checkout --theirs pnpm-lock.yaml
+  pnpm install                 # rewrites the lockfile to match the merged package.json
+  git add pnpm-lock.yaml
+  ```
+
+- **Shared `actions/…` (or similar) files** — when both branches changed the *same* function for
+  *different* reasons, **combine** the changes rather than pick one. If combining by hand is risky,
+  accepting the incoming side is a safe minimum, but confirm you are not losing a real change.
+
+Resolving locally (rather than in GitHub's web editor) is the safer default precisely because it
+lets you regenerate the lockfile and run `prisma validate` before pushing. Push the resolved
+branch and the PR's conflicts clear automatically.
+
+> **Reminder:** if any conflicted migration **drops columns**, merging triggers a build that runs
+> `prisma migrate deploy` and applies that drop irreversibly. Confirm a fresh Neon restore point
+> exists (Step 2) before merging — a code revert alone cannot undo an applied migration.
 
 ---
 
@@ -470,6 +517,34 @@ gh pr create --base main --head dev --title "release: disaster-recovery resync" 
 
 ---
 
+### Snags you may hit (Steps 1, 5 & 8b) — and the fix
+
+These three came up in practice while reconciling the schema. None means anything is broken;
+each has a one-line fix.
+
+1. **`git restore prisma/schema.prisma` → `error: path 'prisma/schema.prisma' is unmerged`**
+   (Step 1, mid-merge). A conflicted file has three versions staged at once, so plain
+   `git restore` can't pick one. Tell Git which you want: `git restore --merge
+   prisma/schema.prisma` regenerates the fresh conflict so you can redo it cleanly (or
+   `git checkout HEAD -- prisma/schema.prisma` to drop the merge for that file and keep your
+   branch's version).
+
+2. **Conflict markers (`<<<<<<<` / `=======` / `>>>>>>>`) back in `schema.prisma`** (Steps 5,
+   8b) — three spots. Keep the half that **has** `tags String[]` in the `crm_campaigns` block;
+   in the two `crm_Contacts` spots keep the half that does **not** have the `created_by String?
+   @db.Uuid` line. Delete the three marker lines at each spot, then `npx prisma format &&
+   npx prisma validate`.
+
+3. **`npx prisma format` lists 11 "already defined" errors** (Step 5). The recovery script
+   re-appends fields upstream has since adopted into its base schema, so they land twice.
+   Delete the two duplicate blocks under the `// >>> RB custom fields` comment: `content_html`
+   in `crm_campaign_steps` (1 error) and the ten Stripe fields in `crm_Targets` (10 errors).
+   **Leave the `crm_Contacts` block** — those fields aren't in upstream, so they don't duplicate.
+   Permanent fix: drop those two now-redundant blocks from `restore-customizations.sh` so it
+   stops re-adding them on every run.
+
+---
+
 ### The whole runbook at a glance
 
 | # | Do | Command / place | Touches DB? |
@@ -483,4 +558,5 @@ gh pr create --base main --head dev --title "release: disaster-recovery resync" 
 | 6 | Set env vars | Netlify dashboard (point `DATABASE_URL` at same Neon) | no |
 | 7 | Commit | `git add -A && git commit -m …` | no |
 | 8 | Push → preview | `git push -u origin <recovery-branch>` (Netlify builds; migrations run here) | **yes (at build)** |
+| 8b | Resolve PR conflicts (if any) | per-field schema merge + `prisma validate`; regenerate `pnpm-lock.yaml` via `pnpm install` | no |
 | 9 | Verify + promote | test preview, then `gh pr create --base main --head dev` | no |
