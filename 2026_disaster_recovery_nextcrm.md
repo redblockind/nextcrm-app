@@ -159,10 +159,11 @@ campaigns system — **all of these are upstream's, not ours**, and they update 
 
 4. Set the environment variables (§6) on the Netlify site. Point DATABASE_URL at Neon.
 
-5. Commit → push to dev → let Netlify build a deploy preview. Verify against the deployed
-   dev environment (no local DB needed). Iron out issues there.
+5. Commit → push the recovery branch → let Netlify build a deploy preview. Verify against the
+   deployed preview (no local DB needed). Iron out issues there.
 
-6. Promote dev → main only once dev is green and a fresh Neon restore point exists.
+6. Open the release PR (recovery branch → main) and promote only once the preview is green and a
+   fresh Neon restore point exists.
 ```
 
 **Rollback at any stage before step 6 is free:** the branch is disposable (`git checkout
@@ -435,19 +436,17 @@ executes `prisma generate → prisma migrate deploy → next build` against the 
 vars point at — which is exactly why you need no local database. Make sure your Step 2 Neon restore
 point exists before this push whenever `prisma/migrations/` changed.
 
-> **Team-flow note:** this project promotes work via `dev → main` (see §4 of AGENTS.md). If you want
-> the recovery to ride the standard `dev` deploy instead of a per-branch preview, bring the recovery
-> branch onto `dev` (`git checkout dev && git merge <recovery-branch>`), resolve any conflicts
-> **file-by-file as described in Step 8b** (not with a blanket take-one-side rule), then
-> `git push origin dev`. Either way, **never force-push `dev` or `main`.**
+> **Reminder:** this recovery flow has **no `dev` integration branch** — the recovery branch
+> *is* the head you push and, in Step 9, open the release PR from. Do not route it through any
+> shared integration branch, and **never force-push `main`.**
 
 ---
 
 ### Step 8b — Resolve conflicts on the release PR (expected, not a failure)
 
-When you open the `dev → main` release PR in Step 9 — or merge the recovery branch onto `dev`
-in the team-flow note above — GitHub may report conflicts. **This is a predictable consequence
-of how the recovery branch is built, not a sign anything went wrong.** Because the branch starts
+When you open the release PR (recovery branch → main) in Step 9, GitHub may report conflicts.
+**This is a predictable consequence of how the recovery branch is built, not a sign anything went
+wrong.** Because the branch starts
 fresh off `upstream/main` and re-applies only your small delta (§2, §3), most files are upstream's
 verbatim and cannot conflict. Conflicts surface **only in the few genuinely shared files both
 branches edited differently** — in practice `prisma/schema.prisma`, `pnpm-lock.yaml`, and any
@@ -498,11 +497,11 @@ branch and the PR's conflicts clear automatically.
 2. Once the preview is green **and** a fresh Neon restore point exists, open the release PR:
 
 ```bash
-gh pr create --base main --head dev --title "release: disaster-recovery resync" \
+gh pr create --base main --head "$(git branch --show-current)" --title "release: disaster-recovery resync" \
   --body "Resynced from upstream and re-applied the verified custom delta (see 2026_disaster_recovery_nextcrm.md)."
 ```
 
-(If you deployed the recovery branch directly rather than via `dev`, use `--head <recovery-branch>`.)
+(`--head` is the recovery branch you created in Step 4, e.g. `resync/upstream-20260621`.)
 
 ---
 
@@ -559,4 +558,4 @@ each has a one-line fix.
 | 7 | Commit | `git add -A && git commit -m …` | no |
 | 8 | Push → preview | `git push -u origin <recovery-branch>` (Netlify builds; migrations run here) | **yes (at build)** |
 | 8b | Resolve PR conflicts (if any) | per-field schema merge + `prisma validate`; regenerate `pnpm-lock.yaml` via `pnpm install` | no |
-| 9 | Verify + promote | test preview, then `gh pr create --base main --head dev` | no |
+| 9 | Verify + promote | test preview, then `gh pr create --base main --head <recovery-branch>` | no |
