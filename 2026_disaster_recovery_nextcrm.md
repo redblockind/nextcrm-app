@@ -517,6 +517,34 @@ gh pr create --base main --head dev --title "release: disaster-recovery resync" 
 
 ---
 
+### Snags you may hit (Steps 1, 5 & 8b) — and the fix
+
+These three came up in practice while reconciling the schema. None means anything is broken;
+each has a one-line fix.
+
+1. **`git restore prisma/schema.prisma` → `error: path 'prisma/schema.prisma' is unmerged`**
+   (Step 1, mid-merge). A conflicted file has three versions staged at once, so plain
+   `git restore` can't pick one. Tell Git which you want: `git restore --merge
+   prisma/schema.prisma` regenerates the fresh conflict so you can redo it cleanly (or
+   `git checkout HEAD -- prisma/schema.prisma` to drop the merge for that file and keep your
+   branch's version).
+
+2. **Conflict markers (`<<<<<<<` / `=======` / `>>>>>>>`) back in `schema.prisma`** (Steps 5,
+   8b) — three spots. Keep the half that **has** `tags String[]` in the `crm_campaigns` block;
+   in the two `crm_Contacts` spots keep the half that does **not** have the `created_by String?
+   @db.Uuid` line. Delete the three marker lines at each spot, then `npx prisma format &&
+   npx prisma validate`.
+
+3. **`npx prisma format` lists 11 "already defined" errors** (Step 5). The recovery script
+   re-appends fields upstream has since adopted into its base schema, so they land twice.
+   Delete the two duplicate blocks under the `// >>> RB custom fields` comment: `content_html`
+   in `crm_campaign_steps` (1 error) and the ten Stripe fields in `crm_Targets` (10 errors).
+   **Leave the `crm_Contacts` block** — those fields aren't in upstream, so they don't duplicate.
+   Permanent fix: drop those two now-redundant blocks from `restore-customizations.sh` so it
+   stops re-adding them on every run.
+
+---
+
 ### The whole runbook at a glance
 
 | # | Do | Command / place | Touches DB? |
