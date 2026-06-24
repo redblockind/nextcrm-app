@@ -1,9 +1,20 @@
-import packageJson from "@/package.json";
+import fs from "fs";
+export default async function getNextVersion() {
+  try {
+    // Read the package.json file synchronously
+    const data = fs.readFileSync("package.json", "utf8");
 
-export default async function getNextVersion(): Promise<string> {
-  // Read the Next.js version straight from the bundled package.json.
-  // Importing it (instead of fs.readFileSync on a relative path) keeps this
-  // reliable in serverless runtimes where the working directory has no
-  // package.json, and guarantees a string is always returned.
-  return packageJson.dependencies?.next ?? "0";
+    try {
+      const packageJson = JSON.parse(data);
+      const version = packageJson.dependencies["next"]; // Replace 'dependencies' with 'devDependencies' if Next.js is a dev dependency
+
+      //console.log("Actual Next.js version:", version);
+      return version;
+    } catch (error) {
+      console.error("Error parsing package.json:", error);
+      return "0";
+    }
+  } catch (error) {
+    console.error("Error reading package.json:", error);
+  }
 }
