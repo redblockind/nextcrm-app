@@ -97,7 +97,7 @@ export function DataTableRowActions<TData>({
     }
   };
 
-  const onSetRole = async (role: "user" | "manager" | "admin") => {
+  const onSetRole = async (role: "admin" | "manager" | "user") => {
     try {
       setLoading(true);
       const result = await setUserRole(data.id, role);
