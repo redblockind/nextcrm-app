@@ -1,11 +1,15 @@
 /**
- * Backfill the `role` column from existing `is_admin` / `is_account_admin` flags.
- * Idempotent: safe to run multiple times.
+ * Report the `role` distribution on the Users table.
+ * Idempotent: read-only, safe to run multiple times.
  *
- * Mapping:
- *   is_admin = true              → role = "admin"
- *   is_account_admin = true      → role = "member"
- *   both false                   → role = "member"
+ * Background: user roles are assigned at import time by
+ * `transformers/users-transformer.ts`, which maps the source MongoDB
+ * `is_admin` flag onto the `role` enum. The Postgres schema no longer
+ * carries the old `is_admin` / `is_account_admin` boolean columns, so
+ * there is nothing left to backfill from after import. This script now
+ * simply verifies how roles are distributed.
+ *
+ * Valid `role` values (see `AppRole` in prisma/schema.prisma): user | manager | admin
  *
  * Run: npx tsx scripts/migration/backfill-roles.ts
  */
@@ -14,16 +18,7 @@ import { PrismaClient } from "@prisma/client";
 const prisma = new PrismaClient();
 
 async function main() {
-  console.log("Starting role backfill...");
-
-  // Admins first (is_admin takes precedence)
-  const adminResult = await prisma.users.updateMany({
-    where: { is_admin: true, role: "member" },
-    data: { role: "admin" },
-  });
-  console.log(`  Updated ${adminResult.count} users to role=admin`);
-
-  // is_account_admin users stay as "member" (already the default)
+  console.log("Checking role distribution...");
 
   const summary = await prisma.users.groupBy({
     by: ["role"],
@@ -31,12 +26,12 @@ async function main() {
   });
   console.log("Role distribution:", summary);
 
-  console.log("Role backfill complete.");
+  console.log("Role check complete.");
 }
 
 main()
   .catch((e) => {
-    console.error("Backfill failed:", e);
+    console.error("Role check failed:", e);
     process.exit(1);
   })
   .finally(() => prisma.$disconnect());
